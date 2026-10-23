@@ -48,12 +48,16 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         let process = Process()
         process.executableURL = binURL
         
-        var args = ["l", "-slt", archiveURL.path]
+        // Security: Avoid passing password in command line arguments (ps inspection prevention)
+        var args = ["l", "-slt"]
+        var inPipe: Pipe? = nil
         if let pw = password, !pw.isEmpty {
-            args.append("-p\(pw)")
+            inPipe = Pipe()
+            process.standardInput = inPipe
         } else {
             args.append("-p-")
         }
+        args.append(archiveURL.path)
         process.arguments = args
         
         let pipe = Pipe()
@@ -61,6 +65,12 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         process.standardError = Pipe()
         
         try process.run()
+        
+        if let pw = password, !pw.isEmpty, let inPipe = inPipe {
+            inPipe.fileHandleForWriting.write(Data((pw + "\n").utf8))
+            try? inPipe.fileHandleForWriting.close()
+        }
+        
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         
@@ -130,32 +140,32 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         }
         try fm.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
         
+        // Use a hidden temporary staging directory in destination to ensure atomic integrity and true interactive conflict resolution (.ask)
+        let stagingDir = destDir.appendingPathComponent(".upackx_staging_\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            // Always ensure the temporary staging folder is cleaned up
+            try? fm.removeItem(at: stagingDir)
+        }
+        
         let process = Process()
         process.executableURL = binURL
         
-        // 7zz command: x -o<dest> -bsp1 -bso1 -y
+        // 7zz extracts into clean staging directory with -aoa
         var args = [
             "x",
-            "-o\(destDir.path)",
+            "-o\(stagingDir.path)",
+            "-aoa",
             "-bsp1",
             "-bso1",
             "-bd"
         ]
         
-        switch options.conflictStrategy {
-        case .overwrite:
-            args.append("-aoa") // Overwrite all
-        case .skip:
-            args.append("-aos") // Skip existing
-        case .rename:
-            args.append("-aou") // Auto rename
-        case .ask:
-            // 7zz doesn't have an interactive GUI prompt, default to rename or skip
-            args.append("-aou")
-        }
-        
+        var inPipe: Pipe? = nil
         if let pw = options.password, !pw.isEmpty {
-            args.append("-p\(pw)")
+            inPipe = Pipe()
+            process.standardInput = inPipe
         } else {
             args.append("-p-")
         }
@@ -169,13 +179,18 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         
         try process.run()
         
+        // Write password via stdin pipe if provided (never exposed in process arguments or logs)
+        if let pw = options.password, !pw.isEmpty, let inPipe = inPipe {
+            inPipe.fileHandleForWriting.write(Data((pw + "\n").utf8))
+            try? inPipe.fileHandleForWriting.close()
+        }
+        
         let outHandle = outPipe.fileHandleForReading
         let archiveBasename = archiveURL.lastPathComponent
         
         var cancelled = false
         var buffer = Data()
         var allOutput = ""
-        let extractedBytes: Int64 = 0
         
         while process.isRunning {
             let chunk = outHandle.availableData
@@ -194,11 +209,10 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
                 buffer.removeSubrange(0...newlineIndex)
                 
                 if let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
-                    
                     let p = ExtractionProgress(
                         archiveName: archiveBasename,
                         currentFilePath: line,
-                        extractedBytes: extractedBytes,
+                        extractedBytes: 0,
                         totalBytes: nil,
                         extractedEntriesCount: 0,
                         totalEntriesCount: nil,
@@ -239,13 +253,119 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
             throw ExtractionError.generic("7zz hoàn thành với lỗi (exit code \(process.terminationStatus))")
         }
         
+        // Commit extracted files from staging to destDir with full conflict resolution and Zip-Slip defense
+        var currentConflictDecision: ConflictDecision? = nil
+        var extractedCount = 0
+        var skippedCount = 0
+        var totalBytesExtracted: Int64 = 0
+        
+        guard let enumerator = fm.enumerator(at: stagingDir, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: []) else {
+            throw ExtractionError.generic("Không thể duyệt thư mục tạm của 7zz.")
+        }
+        
+        var dirURLs: [URL] = []
+        var fileURLs: [URL] = []
+        
+        while let itemURL = enumerator.nextObject() as? URL {
+            let isDir = (try? itemURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            if isDir {
+                dirURLs.append(itemURL)
+            } else {
+                fileURLs.append(itemURL)
+            }
+        }
+        
+        let stagingCanonical = stagingDir.resolvingSymlinksInPath().path
+        
+        // Sort directories by path depth (shallow first) to recreate directory tree
+        dirURLs.sort { $0.path.count < $1.path.count }
+        for dirURL in dirURLs {
+            let itemCanonical = dirURL.resolvingSymlinksInPath().path
+            guard itemCanonical.hasPrefix(stagingCanonical) else { continue }
+            var safeRel = String(itemCanonical.dropFirst(stagingCanonical.count))
+            while safeRel.hasPrefix("/") { safeRel.removeFirst() }
+            guard !safeRel.isEmpty else { continue }
+            let targetURL = try PathSecurity.resolveSafeDestinationURL(for: safeRel, in: destDir)
+            try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+        }
+        
+        for fileURL in fileURLs {
+            let itemCanonical = fileURL.resolvingSymlinksInPath().path
+            guard itemCanonical.hasPrefix(stagingCanonical) else { continue }
+            var safeRel = String(itemCanonical.dropFirst(stagingCanonical.count))
+            while safeRel.hasPrefix("/") { safeRel.removeFirst() }
+            guard !safeRel.isEmpty else { continue }
+            let targetURL = try PathSecurity.resolveSafeDestinationURL(for: safeRel, in: destDir)
+            
+            // Check cancellation during move
+            let p = ExtractionProgress(
+                archiveName: archiveBasename,
+                currentFilePath: safeRel,
+                extractedBytes: totalBytesExtracted,
+                totalBytes: nil,
+                extractedEntriesCount: extractedCount,
+                totalEntriesCount: fileURLs.count,
+                elapsedTime: Date().timeIntervalSince(startTime)
+            )
+            if !progress(p) {
+                throw ExtractionError.cancelled
+            }
+            
+            var finalDestinationURL = targetURL
+            if fm.fileExists(atPath: targetURL.path) {
+                let action: ConflictAction
+                if let active = currentConflictDecision, active.applyToAll {
+                    action = active.action
+                } else {
+                    switch options.conflictStrategy {
+                    case .overwrite:
+                        action = .overwrite
+                    case .skip:
+                        action = .skip
+                    case .rename:
+                        action = .rename
+                    case .ask:
+                        if let resolver = options.conflictResolver {
+                            let decision = resolver(targetURL)
+                            if decision.applyToAll {
+                                currentConflictDecision = decision
+                            }
+                            action = decision.action
+                        } else {
+                            // If conflict cannot be prompted interactively, skip the file safely
+                            action = .skip
+                        }
+                    }
+                }
+                
+                switch action {
+                case .cancel:
+                    throw ExtractionError.cancelled
+                case .skip:
+                    skippedCount += 1
+                    continue
+                case .rename:
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
+                case .overwrite:
+                    try? fm.removeItem(at: targetURL)
+                    finalDestinationURL = targetURL
+                }
+            }
+            
+            try GoogleDriveHelper.safeCommitFile(from: fileURL, to: finalDestinationURL)
+            extractedCount += 1
+            if let size = (try? finalDestinationURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                totalBytesExtracted += Int64(size)
+            }
+        }
+        
         let elapsed = Date().timeIntervalSince(startTime)
         return ExtractionResult(
             archiveURL: archiveURL,
             destinationURL: destDir,
-            extractedCount: 1,
-            skippedCount: 0,
-            totalBytes: extractedBytes,
+            extractedCount: extractedCount,
+            skippedCount: skippedCount,
+            totalBytes: totalBytesExtracted,
             elapsedTime: elapsed
         )
     }

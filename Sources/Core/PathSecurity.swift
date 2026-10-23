@@ -81,4 +81,21 @@ public enum PathSecurity {
         
         return targetURL
     }
+    
+    /// Generates a non-conflicting file URL by appending an incremental counter (e.g., "file (1).txt")
+    public static func generateNonConflictingURL(for fileURL: URL) -> URL {
+        let parent = fileURL.deletingLastPathComponent()
+        let ext = fileURL.pathExtension
+        let base = fileURL.deletingPathExtension().lastPathComponent
+        
+        var counter = 1
+        var candidate: URL
+        repeat {
+            let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+            candidate = parent.appendingPathComponent(newName)
+            counter += 1
+        } while FileManager.default.fileExists(atPath: candidate.path)
+        
+        return candidate
+    }
 }
