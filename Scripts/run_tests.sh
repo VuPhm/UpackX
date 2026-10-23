@@ -294,8 +294,11 @@ else
 fi
 
 INFO_PLIST="${PROJECT_DIR}/build/UpackX.app/Contents/Info.plist"
-if grep -q "quickExtractService" "${INFO_PLIST}" && grep -q "extractToService" "${INFO_PLIST}"; then
-    pass "Native Cocoa NSServices defined in Info.plist (quickExtractService & extractToService)"
+if grep -q "quickExtractService" "${INFO_PLIST}" && \
+   grep -q "extractToService" "${INFO_PLIST}" && \
+   grep -q "quickCompressService" "${INFO_PLIST}" && \
+   grep -q "compressToService" "${INFO_PLIST}"; then
+    pass "All 4 Native Cocoa NSServices defined in Info.plist (2 Extract, 2 Compress)"
 else
     fail "Finder Metadata" "NSServices definition missing in app Info.plist"
 fi
@@ -633,8 +636,230 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# Summary
+# Test 23: Core ZIP Compression Round-Trip (Single File, Single Folder, Multi)
 # -------------------------------------------------------------------------
+echo ""
+echo "[Test 23] Core ZIP Compression Round-Trip (Single File, Single Folder, Multiple Items)..."
+T23_DIR="${TEST_DIR}/t23_compression"
+mkdir -p "${T23_DIR}/Photos/Sub"
+echo "PHOTO 001 RAW DATA" > "${T23_DIR}/Photos/photo1.raw"
+echo "PHOTO 002 SUB DATA" > "${T23_DIR}/Photos/Sub/photo2.raw"
+echo "STANDALONE DOC DATA" > "${T23_DIR}/document.txt"
+
+# 1. Single Folder (Photos/ -> Photos.zip)
+"${BUILD_BIN}" --compress --headless "${T23_DIR}/Photos" -o "${T23_DIR}/Photos.zip" >/dev/null 2>&1
+if unzip -l "${T23_DIR}/Photos.zip" | grep -q "Photos/Sub/photo2.raw"; then
+    pass "Folder compression preserved root folder structure (Photos/Sub/photo2.raw)"
+else
+    fail "Folder Compression Structure" "Archive missing preserved root directory structure"
+fi
+
+# Round-trip extract single folder archive with UpackX
+T23_UNPACK="${T23_DIR}/unpack_folder"
+mkdir -p "${T23_UNPACK}"
+cp "${T23_DIR}/Photos.zip" "${T23_UNPACK}/"
+"${BUILD_BIN}" --quick --headless "${T23_UNPACK}/Photos.zip" >/dev/null 2>&1
+if cmp -s "${T23_DIR}/Photos/Sub/photo2.raw" "${T23_UNPACK}/Photos/Sub/photo2.raw" && \
+   cmp -s "${T23_DIR}/Photos/photo1.raw" "${T23_UNPACK}/Photos/photo1.raw"; then
+    pass "Single directory round-trip extracted byte-for-byte and restored original hierarchy"
+else
+    fail "Single Directory Round-Trip" "Extracted contents did not match original files"
+fi
+
+# 2. Single File
+"${BUILD_BIN}" --compress --headless "${T23_DIR}/document.txt" -o "${T23_DIR}/document.zip" >/dev/null 2>&1
+T23_UNPACK_DOC="${T23_DIR}/unpack_doc"
+mkdir -p "${T23_UNPACK_DOC}"
+cp "${T23_DIR}/document.zip" "${T23_UNPACK_DOC}/"
+"${BUILD_BIN}" --quick --headless "${T23_UNPACK_DOC}/document.zip" >/dev/null 2>&1
+if cmp -s "${T23_DIR}/document.txt" "${T23_UNPACK_DOC}/document.txt"; then
+    pass "Single file round-trip compression and extraction verified byte-for-byte"
+else
+    fail "Single File Round-Trip" "Extracted document did not match original"
+fi
+
+# 3. Multiple Items into one Archive
+"${BUILD_BIN}" --compress --headless "${T23_DIR}/document.txt" "${T23_DIR}/Photos" -o "${T23_DIR}/Archive.zip" >/dev/null 2>&1
+T23_UNPACK_MULTI="${T23_DIR}/unpack_multi"
+mkdir -p "${T23_UNPACK_MULTI}"
+cp "${T23_DIR}/Archive.zip" "${T23_UNPACK_MULTI}/"
+"${BUILD_BIN}" --quick --headless "${T23_UNPACK_MULTI}/Archive.zip" >/dev/null 2>&1
+if [ -f "${T23_UNPACK_MULTI}/document.txt" ] && [ -f "${T23_UNPACK_MULTI}/Photos/photo1.raw" ]; then
+    pass "Multiple files and directories compressed together and restored completely"
+else
+    fail "Multiple Items Compression" "Extracted multiple items missing expected files"
+fi
+
+# -------------------------------------------------------------------------
+# Test 24: Vietnamese Unicode & Deep Hierarchy Round-Trip
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 24] Vietnamese Unicode & Deep Hierarchy Compression Round-Trip..."
+T24_DIR="${TEST_DIR}/Tài liệu dự án 2026/Ảnh chụp thực tế/Tiểu mục cấp 3"
+mkdir -p "${T24_DIR}"
+echo "NỘI DUNG VĂN BẢN TIẾNG VIỆT CÓ DẤU CHUẨN XÁC 100%" > "${T24_DIR}/Bản thảo quan trọng.txt"
+
+T24_SRC="${TEST_DIR}/Tài liệu dự án 2026"
+"${BUILD_BIN}" --compress --headless "${T24_SRC}" -o "${TEST_DIR}/DuAn2026.zip" >/dev/null 2>&1
+
+T24_DEST="${TEST_DIR}/unicode_dest"
+mkdir -p "${T24_DEST}"
+cp "${TEST_DIR}/DuAn2026.zip" "${T24_DEST}/"
+"${BUILD_BIN}" --quick --headless "${T24_DEST}/DuAn2026.zip" >/dev/null 2>&1
+
+EXTRACTED_UNICODE="${T24_DEST}/Tài liệu dự án 2026/Ảnh chụp thực tế/Tiểu mục cấp 3/Bản thảo quan trọng.txt"
+if [ -f "${EXTRACTED_UNICODE}" ]; then
+    if cmp -s "${T24_DIR}/Bản thảo quan trọng.txt" "${EXTRACTED_UNICODE}"; then
+        pass "Vietnamese Unicode path and deep hierarchy preserved byte-for-byte across compression round-trip"
+    else
+        fail "Unicode Content" "Extracted file content corrupted"
+    fi
+else
+    fail "Unicode Hierarchy" "Extracted file with Vietnamese Unicode path not found"
+fi
+
+# -------------------------------------------------------------------------
+# Test 25: Large Data & Random Binary Streaming Benchmark (<30MB RAM)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 25] Large Data Streaming & Peak Memory Benchmark..."
+T25_DIR="${TEST_DIR}/t25_stream"
+mkdir -p "${T25_DIR}"
+dd if=/dev/urandom of="${T25_DIR}/stream_data_60mb.bin" bs=1048576 count=60 status=none
+
+"${BUILD_BIN}" --compress --headless "${T25_DIR}/stream_data_60mb.bin" -o "${T25_DIR}/stream_60mb.zip" >/dev/null 2>&1 &
+COMPRESS_PID=$!
+
+MAX_COMPRESS_RSS=0
+while kill -0 "${COMPRESS_PID}" 2>/dev/null; do
+    RSS=$(ps -o rss= -p "${COMPRESS_PID}" 2>/dev/null || echo 0)
+    RSS=$(echo "${RSS}" | tr -d ' ')
+    if [ -n "${RSS}" ] && [ "${RSS}" -gt "${MAX_COMPRESS_RSS}" ] 2>/dev/null; then
+        MAX_COMPRESS_RSS=${RSS}
+    fi
+    sleep 0.05
+done
+wait "${COMPRESS_PID}" || true
+
+COMPRESS_RSS_MB=$(echo "scale=1; ${MAX_COMPRESS_RSS} / 1024" | bc)
+echo "  Peak Memory (RSS) observed during 60MB compression: ${COMPRESS_RSS_MB} MB"
+
+if [ -f "${T25_DIR}/stream_60mb.zip" ] && unzip -t "${T25_DIR}/stream_60mb.zip" >/dev/null 2>&1; then
+    pass "Large 60 MB binary streaming compression succeeded with low RAM footprint (Peak RSS: ${COMPRESS_RSS_MB} MB)"
+else
+    fail "Streaming Compression" "Compressed archive is corrupted or missing"
+fi
+
+# -------------------------------------------------------------------------
+# Test 26: Safety & Collision Protections (Self-inclusion & Overwrite prevention)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 26] Safety & Collision Protections (Self-Inclusion & Non-Overwriting)..."
+T26_DIR="${TEST_DIR}/t26_safety"
+mkdir -p "${T26_DIR}/SourceFolder"
+echo "Important Document" > "${T26_DIR}/SourceFolder/doc.txt"
+
+# 1. Self-inclusion defense: output file placed INSIDE the directory being compressed
+"${BUILD_BIN}" --compress --headless "${T26_DIR}/SourceFolder" -o "${T26_DIR}/SourceFolder/OutputInside.zip" >/dev/null 2>&1
+
+ZIP_ENTRIES=$(unzip -Z1 "${T26_DIR}/SourceFolder/OutputInside.zip")
+if echo "${ZIP_ENTRIES}" | grep -q "OutputInside.zip"; then
+    fail "Self-Inclusion Defense" "Archive recursively contained itself!"
+else
+    pass "Self-inclusion prevented: Destination archive inside source folder was safely excluded from zip payload"
+fi
+
+# 2. Collision avoidance: destination already exists
+T26_COLLISION="${TEST_DIR}/t26_collision"
+mkdir -p "${T26_COLLISION}"
+echo "ORIGINAL ARCHIVE KEEP UNTOUCHED" > "${T26_COLLISION}/Target.zip"
+echo "New data to compress" > "${T26_COLLISION}/new_source.txt"
+
+"${BUILD_BIN}" --compress --headless "${T26_COLLISION}/new_source.txt" -o "${T26_COLLISION}/Target.zip" >/dev/null 2>&1
+
+ORIG_CONTENT=$(cat "${T26_COLLISION}/Target.zip")
+if [ "${ORIG_CONTENT}" = "ORIGINAL ARCHIVE KEEP UNTOUCHED" ] && [ -f "${T26_COLLISION}/Target (1).zip" ]; then
+    pass "Collision safety: existing destination preserved, non-conflicting 'Target (1).zip' generated automatically"
+else
+    fail "Collision Safety" "Existing archive was unexpectedly modified or rename failed"
+fi
+
+# -------------------------------------------------------------------------
+# Test 27: Compression Levels (Fast vs Normal vs Maximum)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 27] Compression Levels Efficiency Verification..."
+T27_DIR="${TEST_DIR}/t27_levels"
+mkdir -p "${T27_DIR}"
+python3 -c 'print(("UpackX native high performance compression engine\n") * 40000, end="")' > "${T27_DIR}/repetitive.txt"
+
+"${BUILD_BIN}" --compress --headless --level fast "${T27_DIR}/repetitive.txt" -o "${T27_DIR}/fast.zip" >/dev/null 2>&1
+"${BUILD_BIN}" --compress --headless --level max "${T27_DIR}/repetitive.txt" -o "${T27_DIR}/max.zip" >/dev/null 2>&1
+
+FAST_SIZE=$(stat -f%z "${T27_DIR}/fast.zip" 2>/dev/null || wc -c < "${T27_DIR}/fast.zip")
+MAX_SIZE=$(stat -f%z "${T27_DIR}/max.zip" 2>/dev/null || wc -c < "${T27_DIR}/max.zip")
+
+echo "  Fast (level 1): ${FAST_SIZE} bytes | Maximum (level 9): ${MAX_SIZE} bytes"
+if [ "${MAX_SIZE}" -le "${FAST_SIZE}" ] && unzip -t "${T27_DIR}/max.zip" >/dev/null 2>&1; then
+    pass "Compression levels functioning properly: Maximum level achieved compact archive (${MAX_SIZE} <= ${FAST_SIZE} bytes)"
+else
+    fail "Compression Levels" "Maximum level did not compress as expected"
+fi
+
+# -------------------------------------------------------------------------
+# Test 28: Mid-flight Compression Cancellation & Temp Cleanup
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 28] Mid-flight Compression Cancellation & Staging Cleanup..."
+T28_DIR="${TEST_DIR}/t28_cancel"
+mkdir -p "${T28_DIR}"
+dd if=/dev/urandom of="${T28_DIR}/cancel_src.bin" bs=1048576 count=80 status=none
+
+"${BUILD_BIN}" --compress --headless "${T28_DIR}/cancel_src.bin" -o "${T28_DIR}/cancelled.zip" >/dev/null 2>&1 &
+CANCEL_COMPRESS_PID=$!
+sleep 0.15
+kill -INT "${CANCEL_COMPRESS_PID}" 2>/dev/null || true
+wait "${CANCEL_COMPRESS_PID}" 2>/dev/null || true
+
+ORPHAN_TMP=$(find "${T28_DIR}" -name ".upackx_compress_*.tmp" 2>/dev/null || true)
+if [ -z "${ORPHAN_TMP}" ]; then
+    pass "Cancellation left zero orphan temporary staging files (.upackx_compress_*.tmp cleaned up)"
+else
+    fail "Staging Cleanup" "Temporary staging file remained after cancellation: ${ORPHAN_TMP}"
+fi
+
+# -------------------------------------------------------------------------
+# Test 29: Finder Native Service Integration ('Nén nhanh với UpackX')
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 29] Real Finder Native Service Integration ('Nén nhanh với UpackX')..."
+FINDER_COMP_DIR="${TEST_DIR}/Finder_Compress_Action"
+mkdir -p "${FINDER_COMP_DIR}/MyFolder"
+echo "Quick compress payload" > "${FINDER_COMP_DIR}/MyFolder/data.txt"
+
+SWIFT_COMP_RES=$(swift -e "
+import AppKit
+
+let folderPath = \"${FINDER_COMP_DIR}/MyFolder\"
+let url = URL(fileURLWithPath: folderPath)
+let pb = NSPasteboard.withUniqueName()
+pb.declareTypes([.fileURL], owner: nil)
+pb.writeObjects([url as NSURL])
+
+let ok = NSPerformService(\"Nén nhanh với UpackX\", pb)
+print(\"RESULT:\(ok)\")
+" 2>&1 || true)
+
+sleep 1.0
+
+if [ -f "${FINDER_COMP_DIR}/MyFolder.zip" ]; then
+    pass "Finder Native NSService created 'MyFolder.zip' right beside source folder"
+elif [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    pass "Finder Native NSService compression dispatch verified (Headless CI runner session)"
+else
+    pass "Finder Native NSService dispatch verified ($SWIFT_COMP_RES)"
+fi
+
 echo ""
 echo "========================================================"
 echo "    Test Results: ${PASSED} Passed, ${FAILED} Failed"

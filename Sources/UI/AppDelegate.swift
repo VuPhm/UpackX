@@ -3,13 +3,14 @@ import AppKit
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var extractToController: ExtractToWindowController?
+    private var compressToController: CompressToWindowController?
     private var activeProgressWC: ProgressWindowController?
     
     private var isCommandLineInvocation: Bool = false
     private var isServiceInvocation: Bool = false
     private var isHeadless: Bool = false
     
-    // Sequential Queue State
+    // Sequential Queue State (Extraction)
     private var taskQueue: [ExtractionTaskItem] = []
     private var currentTaskIndex: Int = 0
     private var queueConflictStrategy: ConflictStrategy? = nil
@@ -47,7 +48,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Give services and openFiles a moment to dispatch on startup
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if !self.isCommandLineInvocation && !self.isServiceInvocation && self.taskQueue.isEmpty && self.extractToController == nil {
+            if !self.isCommandLineInvocation && !self.isServiceInvocation && self.taskQueue.isEmpty && self.extractToController == nil && self.compressToController == nil {
                 self.showMainWindow()
             }
         }
@@ -62,6 +63,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
                 } else {
                     self?.showExtractToDialogForTasks(tasks)
+                }
+            }
+            mwc.onCompressSelected = { [weak self] urls, isQuick in
+                if isQuick {
+                    self?.startQuickCompression(sources: urls)
+                } else {
+                    self?.showCompressToDialog(sources: urls)
                 }
             }
             mainWindowController = mwc
@@ -84,17 +92,39 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         
+        var isCompression = false
         var isQuick = true
         var conflictStrategy: ConflictStrategy? = nil
+        var compressionLevel: CompressionLevel = .normal
+        var customOutput: URL? = nil
         var filePaths: [String] = []
         
         var i = 0
         while i < args.count {
             let arg = args[i]
-            if arg == "--quick" {
+            if arg == "--compress" || arg == "-c" {
+                isCompression = true
+            } else if arg == "--quick" {
                 isQuick = true
             } else if arg == "--extract-to" {
                 isQuick = false
+                isCompression = false
+            } else if arg == "--compress-to" {
+                isQuick = false
+                isCompression = true
+            } else if arg == "--level" && i + 1 < args.count {
+                i += 1
+                let lvlStr = args[i].lowercased()
+                if lvlStr == "fast" || lvlStr == "1" {
+                    compressionLevel = .fast
+                } else if lvlStr == "max" || lvlStr == "maximum" || lvlStr == "9" {
+                    compressionLevel = .maximum
+                } else {
+                    compressionLevel = .normal
+                }
+            } else if (arg == "-o" || arg == "--output") && i + 1 < args.count {
+                i += 1
+                customOutput = URL(fileURLWithPath: args[i])
             } else if arg == "--overwrite" {
                 conflictStrategy = .overwrite
             } else if arg == "--skip" {
@@ -118,12 +148,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         
         isCommandLineInvocation = true
         let urls = filePaths.map { URL(fileURLWithPath: $0) }
-        let tasks = MultipartDetector.groupArchives(urls)
         
-        if isQuick {
-            startSequentialExtraction(tasks: tasks, explicitConflictStrategy: conflictStrategy)
+        if isCompression {
+            if isQuick || isHeadless {
+                startQuickCompression(sources: urls, explicitDestination: customOutput, level: compressionLevel, conflictStrategy: conflictStrategy)
+            } else {
+                showCompressToDialog(sources: urls)
+            }
         } else {
-            showExtractToDialogForTasks(tasks)
+            let tasks = MultipartDetector.groupArchives(urls)
+            if isQuick {
+                startSequentialExtraction(tasks: tasks, explicitConflictStrategy: conflictStrategy, customDestination: customOutput)
+            } else {
+                showExtractToDialogForTasks(tasks)
+            }
         }
     }
     
@@ -132,8 +170,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func application(_ application: NSApplication, openFiles filenames: [String]) {
         guard !isCommandLineInvocation else { return }
         let urls = filenames.map { URL(fileURLWithPath: $0) }
-        let tasks = MultipartDetector.groupArchives(urls)
-        startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
+        
+        // If all items are recognized archives, extract. Otherwise, compress.
+        let allArchives = urls.allSatisfy { ArchiveFormat.detect(from: $0) != .unknown }
+        if allArchives {
+            let tasks = MultipartDetector.groupArchives(urls)
+            startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
+        } else {
+            startQuickCompression(sources: urls)
+        }
     }
     
     // MARK: - Cocoa NSServices Endpoints
@@ -158,6 +203,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let tasks = MultipartDetector.groupArchives(urls)
         showExtractToDialogForTasks(tasks)
+    }
+    
+    @objc public func quickCompressService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        isServiceInvocation = true
+        let urls = extractURLs(from: pboard)
+        guard !urls.isEmpty else {
+            error.pointee = "Không tìm thấy file hoặc thư mục hợp lệ trong pasteboard." as NSString
+            return
+        }
+        startQuickCompression(sources: urls)
+    }
+    
+    @objc public func compressToService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        isServiceInvocation = true
+        let urls = extractURLs(from: pboard)
+        guard !urls.isEmpty else {
+            error.pointee = "Không tìm thấy file hoặc thư mục hợp lệ trong pasteboard." as NSString
+            return
+        }
+        showCompressToDialog(sources: urls)
     }
     
     private func extractURLs(from pboard: NSPasteboard) -> [URL] {
@@ -187,6 +252,149 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return []
+    }
+    
+    // MARK: - Compression Workflows
+    
+    public func startQuickCompression(
+        sources: [URL],
+        explicitDestination: URL? = nil,
+        level: CompressionLevel = .normal,
+        conflictStrategy: ConflictStrategy? = nil
+    ) {
+        guard !sources.isEmpty else {
+            checkTerminationIfNeeded()
+            return
+        }
+        
+        let firstSource = sources[0]
+        let parentDir = firstSource.deletingLastPathComponent()
+        let defaultArchiveName: String
+        if sources.count == 1 {
+            let base = firstSource.deletingPathExtension().lastPathComponent
+            defaultArchiveName = base.isEmpty ? "Archive.zip" : "\(base).zip"
+        } else {
+            defaultArchiveName = "Archive.zip"
+        }
+        
+        let targetDest = explicitDestination ?? parentDir.appendingPathComponent(defaultArchiveName)
+        let strategy = conflictStrategy ?? (isHeadless ? .rename : .rename)
+        
+        let options = CompressionOptions(
+            destinationURL: targetDest,
+            compressionLevel: level,
+            conflictStrategy: strategy,
+            conflictResolver: isHeadless ? nil : { ConflictDialog.prompt(for: $0) }
+        )
+        
+        executeCompression(sources: sources, options: options)
+    }
+    
+    public func showCompressToDialog(sources: [URL]) {
+        guard !sources.isEmpty else {
+            checkTerminationIfNeeded()
+            return
+        }
+        
+        let dialog = CompressToWindowController(sources: sources)
+        self.compressToController = dialog
+        
+        dialog.onConfirm = { [weak self] destinationURL, level in
+            self?.compressToController = nil
+            let options = CompressionOptions(
+                destinationURL: destinationURL,
+                compressionLevel: level,
+                conflictStrategy: .ask,
+                conflictResolver: { ConflictDialog.prompt(for: $0) }
+            )
+            self?.executeCompression(sources: sources, options: options)
+        }
+        
+        dialog.onCancel = { [weak self] in
+            self?.compressToController = nil
+            self?.checkTerminationIfNeeded()
+        }
+        
+        dialog.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    private func executeCompression(sources: [URL], options: CompressionOptions) {
+        let displayName: String
+        if sources.count == 1 {
+            displayName = sources[0].lastPathComponent
+        } else {
+            displayName = "Nén \(sources.count) mục"
+        }
+        
+        let progressWC: ProgressWindowController?
+        if isHeadless {
+            progressWC = nil
+        } else {
+            progressWC = ProgressWindowController(archiveName: displayName, isCompressing: true)
+            self.activeProgressWC = progressWC
+            progressWC?.showWindow(nil)
+        }
+        
+        var cancelled = false
+        progressWC?.onCancel = {
+            cancelled = true
+        }
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak progressWC] in
+            ZipCompressor.shared.compress(
+                sources: sources,
+                options: options,
+                progress: { prog in
+                    if cancelled || (progressWC?.isCancelled ?? false) {
+                        return false
+                    }
+                    progressWC?.update(compressionProgress: prog)
+                    return true
+                },
+                completion: { result in
+                    DispatchQueue.main.async {
+                        progressWC?.close()
+                        self?.activeProgressWC = nil
+                        
+                        switch result {
+                        case .success(let compResult):
+                            NotificationHelper.shared.notifyCompressionSuccess(
+                                archiveURL: compResult.destinationURL,
+                                totalItems: compResult.totalItemsCompressed,
+                                archiveSize: compResult.archiveSize,
+                                elapsedTime: compResult.elapsedTime
+                            )
+                            if self?.isCommandLineInvocation ?? false {
+                                print("UpackX: Compressed \(compResult.totalItemsCompressed) items to \(compResult.destinationURL.path)")
+                            }
+                            self?.checkTerminationIfNeeded()
+                            
+                        case .failure(let err):
+                            if case CompressionError.cancelled = err {
+                                if self?.isCommandLineInvocation ?? false {
+                                    fputs("UpackX: Compression cancelled.\n", stderr)
+                                }
+                                self?.isCancelled = true
+                            } else {
+                                NotificationHelper.shared.notifyCompressionFailure(
+                                    archiveName: options.destinationURL.lastPathComponent,
+                                    error: err
+                                )
+                                if self?.isCommandLineInvocation ?? false {
+                                    fputs("UpackX Compression Error: \(err.localizedDescription)\n", stderr)
+                                } else if !(self?.isHeadless ?? false) {
+                                    let alert = NSAlert(error: err)
+                                    alert.runModal()
+                                }
+                                self?.failedCount += 1
+                            }
+                            self?.checkTerminationIfNeeded()
+                        }
+                    }
+                }
+            )
+        }
     }
     
     // MARK: - Queue & Extraction Workflows
@@ -378,7 +586,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func checkTerminationIfNeeded() {
-        if (isCommandLineInvocation || isServiceInvocation) && activeProgressWC == nil && extractToController == nil && taskQueue.isEmpty {
+        if (isCommandLineInvocation || isServiceInvocation) &&
+            activeProgressWC == nil &&
+            extractToController == nil &&
+            compressToController == nil &&
+            taskQueue.isEmpty {
             if isCommandLineInvocation {
                 exit(failedCount > 0 ? 1 : (isCancelled ? 130 : 0))
             } else {

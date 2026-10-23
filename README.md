@@ -1,11 +1,11 @@
-# UpackX — Lightweight Native Archive Extractor for macOS
+# UpackX — Lightweight Native Archive Extractor & Compressor for macOS
 
-[![Release](https://img.shields.io/badge/release-v1.2.0-blue.svg)](https://github.com/VuPhm/UpackX/releases)
+[![Release](https://img.shields.io/badge/release-v1.3.0-blue.svg)](https://github.com/VuPhm/UpackX/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B%20%7C%20Intel%20x86__64-brightgreen.svg)]()
 [![Architecture](https://img.shields.io/badge/arch-x86__64-orange.svg)]()
 [![License](https://img.shields.io/badge/license-Proprietary%20%2F%20BSD%20Notices-lightgrey.svg)](THIRD_PARTY_NOTICES.md)
 
-**UpackX** is a high-performance, lightweight native archive extractor engineered specifically for **Intel-based Macs** running macOS 14.0 Sonoma or newer. Built purely in native **Swift** and **AppKit**, UpackX integrates directly into the macOS Finder context menu with zero background daemons.
+**UpackX** is a high-performance, lightweight native archive extractor and compressor engineered specifically for **Intel-based Macs** running macOS 14.0 Sonoma or newer. Built purely in native **Swift** and **AppKit**, UpackX integrates directly into the macOS Finder context menu with zero background daemons.
 
 [English](#english) • [Tiếng Việt](#tiếng-việt)
 
@@ -18,13 +18,14 @@
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      UpackX — Native macOS Extractor                        │
+│                 UpackX — Native macOS Extractor & Compressor                │
 ├────────────────────────────────┬────────────────────────────────────────────┤
-│ Executable Size                │ 438 KB (Swift native, -O optimized)        │
-│ Total Application Bundle Size  │ 3.4 MB (Includes standalone 7zz helper)    │
+│ Executable Size                │ ~590 KB (Swift native, -O optimized)       │
+│ Total Application Bundle Size  │ 3.6 MB (Includes standalone 7zz helper)    │
 │ Peak Memory Usage (RSS)        │ ~12.5 – 27.2 MB constant during streaming  │
 │ Background Daemons             │ 0 (Exits cleanly upon task completion)     │
-│ Finder Integration             │ 2 Native Cocoa NSServices (Zero duplicates)│
+│ Finder Integration             │ 4 Native Cocoa NSServices (Zero duplicates)│
+│ Core Compression Engine        │ Native libarchive streaming (Fast/Norm/Max)│
 │ External Dependencies          │ Zero (Self-contained, no Homebrew needed)  │
 │ Minimum System Requirement     │ macOS 14.0 Sonoma (Intel x86_64)           │
 └────────────────────────────────┴────────────────────────────────────────────┘
@@ -36,51 +37,64 @@
 
 ```text
   ┌──────────────────────────────────────────────────────────────┐
-  │  ● ● ●   UpackX — Lightweight macOS Archive Extractor        │
+  │  ● ● ●   UpackX — Native macOS Extractor & Compressor        │
   ├──────────────────────────────────────────────────────────────┤
   │                                                              │
   │     ┌──────────────────────────────────────────────────┐     │
   │     │                                                  │     │
   │     │                    [📦]                          │     │
   │     │                                                  │     │
-  │     │          Drag & drop archive file here           │     │
+  │     │        Drag & drop archives or folders here      │     │
   │     │                                                  │     │
   │     └──────────────────────────────────────────────────┘     │
   │                                                              │
-  │      Finder Services: Active (2 services) • Intel x86_64     │
+  │   Finder Services: Active (4 services: 2 Extract, 2 Compress)│
   │                                                              │
-  │       [ Select Archive... ]    [ Check Finder Services ]     │
+  │    [ Extract Archive... ]        [ Compress ZIP... ]         │
+  │                                                              │
+  │                [ Check Finder Services ]                     │
   └──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 3. Current Features
+### 3. Features
 
+#### Extraction
 - **Direct Extraction (No Wrapper Folder):** Uncompresses archive contents directly alongside the source archive without creating unnecessary enclosing wrapper folders.
-- **Dual Finder Quick Actions:**
+- **Dual Extraction Finder Actions:**
   - `Giải nén nhanh với UpackX` (Quick Extract): Instantly extracts to the parent directory.
   - `Giải nén… với UpackX` (Extract To...): Displays a native modal window to choose custom destination and conflict rules.
 - **Collision & Overwrite Safety:** Interactive prompt when a file conflict occurs (Skip, Auto-rename copy `(1)`, or Overwrite).
-- **Safe Directory Merging:** When extracting into existing folders (e.g. Google Drive sync folders), existing files and directory structures are safely merged rather than replaced destructively.
-- **Zip-Slip Attack Prevention:** Strict validation blocks any archive attempting path traversal outside destination boundaries (`../../`).
-- **Encrypted Archives:** Automatic password prompt dialog for encrypted ZIP, 7Z, and RAR archives.
-- **Multi-Part Volume Support:** Automatically groups `.part1.rar`, `.7z.001`, `.z01`, and `.r00` volumes; detects and warns if any volume is missing.
-- **Google Drive for Desktop Support:** Detects virtual mount points, handles `SF_DATALESS` placeholder files, and provides robust non-atomic rename fallbacks.
+- **Safe Directory Merging:** When extracting into existing folders, files are merged safely without deleting directory structures.
+- **Zip-Slip Prevention:** Strict validation blocks path traversal attacks (`../../`).
+- **Encrypted Archives:** Automatic password prompt dialog with secure stdin piping (never exposed in process arguments or logs).
+- **Multi-Part Volume Support:** Automatically groups `.part1.rar`, `.7z.001`, `.z01`, and `.r00` volumes; warns if any volume is missing.
+
+#### Compression (v1.3.0 MVP)
+- **Native Streaming ZIP Engine:** Uses `libarchive` with fixed 64 KB buffers keeping memory usage < 13 MB RSS.
+- **Structure Preservation:** Single directory `Photos/` compresses into `Photos.zip` preserving `Photos/...` internal hierarchy. Quick extract recovers original structure cleanly.
+- **Single File & Multi-Item Support:** Compress individual files or multiple files/folders into a unified `Archive.zip`.
+- **Dual Compression Finder Actions:**
+  - `Nén nhanh với UpackX` (Quick Compress): In-place ZIP creation with automatic non-conflicting rename on collision.
+  - `Nén… với UpackX` (Compress To...): Native AppKit modal window to pick custom archive name, destination folder, compression level, and preview source size.
+- **Compression Levels:** Fast (level 1), Normal (level 6), and Maximum (level 9).
+- **Self-Inclusion Protection:** Output archives created inside a folder being compressed are automatically excluded from the archive contents.
+- **Atomic Staging:** Data is compressed into a temporary staging file (`.upackx_compress_<uuid>.tmp`) and renamed upon validation. Cancellation leaves zero orphaned files.
 
 ---
 
 ### 4. Supported Archive Formats
 
-| Format | Extension | Engine | Encryption Support |
+| Format | Extension | Extraction | Compression |
 |---|---|---|---|
-| **ZIP** | `.zip` | System `libarchive` | ZipCrypto, AES-128, AES-256 |
-| **7-Zip** | `.7z` | Standalone `7zz` helper | AES-256 |
-| **RAR** | `.rar` | Standalone `7zz` helper | RAR4 / RAR5 encrypted |
-| **Tarball** | `.tar`, `.tar.gz`, `.tgz` | System `libarchive` | N/A |
-| **BZip2** | `.bz2`, `.tar.bz2` | System `libarchive` | N/A |
-| **XZ** | `.xz`, `.tar.xz` | System `libarchive` | N/A |
-| **Multi-Part** | `.part1.rar`, `.7z.001`, `.z01` | Integrated volume manager | Supported |
+| **ZIP** | `.zip` | Native `libarchive` | Native `libarchive` (Levels 1–9) |
+| **7-Zip** | `.7z` | Bundled `7zz` | Planned (Round C) |
+| **RAR** | `.rar` | Bundled `7zz` | N/A |
+| **Tarball** | `.tar`, `.tar.gz`, `.tgz` | Native `libarchive` | Planned |
+| **BZip2** | `.bz2`, `.tar.bz2` | Native `libarchive` | Planned |
+| **XZ** | `.xz`, `.tar.xz` | Native `libarchive` | Planned |
+| **Multi-Part** | `.part1.rar`, `.7z.001`, `.z01` | Integrated volume manager | Planned |
 
 ---
 
@@ -88,7 +102,6 @@
 
 - **Processor:** Intel 64-bit (`x86_64`).
 - **Operating System:** macOS 14.0 Sonoma or newer.
-- *Note:* Apple Silicon (M1/M2/M3/M4) native binaries have not been certified for this release.
 
 ---
 
@@ -96,70 +109,20 @@
 
 Pre-built release packages are available on the [GitHub Releases page](https://github.com/VuPhm/UpackX/releases):
 
-- **Apple Disk Image (Recommended):** `UpackX-v1.2.0-macOS-Intel.dmg`
-- **Apple Installer Package:** `UpackX-v1.2.0-macOS-Intel.pkg`
-- **Portable ZIP Bundle:** `UpackX-v1.2.0-macOS-Intel.zip`
+- **Apple Disk Image (Recommended):** `UpackX-v1.3.0-macOS-Intel.dmg`
+- **Apple Installer Package:** `UpackX-v1.3.0-macOS-Intel.pkg`
+- **Portable ZIP Bundle:** `UpackX-v1.3.0-macOS-Intel.zip`
 - **Checksums:** `SHA256SUMS.txt`
 
 ---
 
-### 7. Installation
+### 7. Finder Quick Actions
 
-#### Method A: Disk Image (.dmg) — Recommended
-1. Download `UpackX-v1.2.0-macOS-Intel.dmg`.
-2. Double-click to mount the DMG.
-3. Drag **UpackX.app** into the **Applications** shortcut.
-4. Launch UpackX once from `/Applications` to activate Finder Services in your user session.
-
-#### Method B: Apple Installer (.pkg)
-1. Download `UpackX-v1.2.0-macOS-Intel.pkg`.
-2. Double-click to run the standard macOS installer wizard.
-3. Follow the on-screen steps.
-4. Launch UpackX once from `/Applications` to finalize Finder Services registration.
-
-> [!NOTE]
-> **Gatekeeper Notice (Developer / Ad-hoc Signed Release):**
-> Because this initial production release is signed with an ad-hoc / developer signature without Apple Developer ID notarization, macOS Gatekeeper may show a notice on first launch. To open:
-> - **Right-click (or Control-click)** on `UpackX.app` in `/Applications` and select **Open**, then click **Open** in the dialog.
-> - You only need to do this once. Do not disable system-wide Gatekeeper.
-
----
-
-### 8. How to Use Finder Services
-
-1. Open **Finder** and locate any archive file.
-2. **Right-click** on the archive.
-3. Select from the context menu:
-   - **Giải nén nhanh với UpackX:** Files are extracted immediately into the containing folder.
-   - **Giải nén… với UpackX:** An AppKit dialog opens allowing you to pick a destination folder and configure conflict rules.
-
----
-
-### 9. Uninstallation
-
-#### Standard Uninstall (Finder)
-1. Quit UpackX if running.
-2. Drag `/Applications/UpackX.app` to the Trash.
-
-#### Complete Clean Uninstall
-To remove the application, CLI symlinks, and clear macOS Services cache:
-```bash
-./Scripts/uninstall.sh
-```
-
----
-
-### 10. Current Limitations
-
-- **Extraction Only:** Creating archives (compression) is planned for Round 2.
-- **Intel x86_64:** Compiled specifically for Intel Macs; Apple Silicon native universal binary is scheduled for a future milestone.
-- **macOS 14+:** Built and verified for macOS Sonoma (14.0+).
-
----
-
-### 11. Development Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for detailed release plans, including the upcoming **Native Compression Engine** (ZIP & 7Z compression, Finder quick compress, compression levels, and multi-volume splitting).
+Right-click on any file or folder in **Finder** to access 4 dedicated native UpackX actions:
+1. **Giải nén nhanh với UpackX:** Direct in-place archive extraction.
+2. **Giải nén… với UpackX:** Customizable extraction destination and conflict policies.
+3. **Nén nhanh với UpackX:** Direct in-place ZIP creation.
+4. **Nén… với UpackX:** Customizable ZIP name, destination, and compression level.
 
 ---
 
@@ -168,29 +131,26 @@ See [ROADMAP.md](ROADMAP.md) for detailed release plans, including the upcoming 
 
 ### 1. Giới thiệu tổng quan
 
-**UpackX** là ứng dụng giải nén native siêu nhẹ, ổn định dành riêng cho máy Mac chạy vi xử lý **Intel (x86_64)** trên macOS 14.0 Sonoma trở lên. Ứng dụng được viết hoàn toàn bằng **Swift** và **AppKit**, tích hợp mượt mà vào menu chuột phải của Finder và tuyệt đối không duy trì tiến trình chạy ngầm (zero daemon).
+**UpackX** là ứng dụng native siêu nhẹ, hiệu năng cao phục vụ cả hai nhu cầu **Nén và Giải nén** trên macOS Intel (x86_64). Tích hợp native 4 thao tác trực tiếp vào menu ngữ cảnh Finder với 0 daemon chạy ngầm.
 
-### 2. Điểm nổi bật & Tối ưu kỹ thuật
+### 2. Điểm nổi bật phiên bản v1.3.0
 
-- **Không tạo thư mục lồng:** Dữ liệu được giải nén trực tiếp ngay cạnh file nén.
-- **2 dịch vụ Finder Native duy nhất:**
-  - `Giải nén nhanh với UpackX`: Giải nén tức thì không mở cửa sổ cấu hình.
-  - `Giải nén… với UpackX`: Hộp thoại chọn nơi lưu và chính sách file trùng.
-- **An toàn tuyệt đối:** Tự động phát hiện và chặn đứng tấn công Zip-Slip (`../../`), bảo vệ file trùng lặp (không ghi đè âm thầm).
-- **Hỗ trợ đầy đủ Multipart:** Tự nhận diện và gom nhóm các volume `.part1.rar`, `.7z.001`, `.z01`; từ chối giải nén nếu thiếu file volume.
-- **Tương thích Google Drive:** Tương thích tốt với thư mục mount Google Drive for Desktop và cờ `SF_DATALESS`.
-- **Tiêu thụ RAM cực thấp:** Cơ chế stream giữ mức tiêu thụ RAM ổn định ở ~12.5 – 27.2 MB kể cả khi giải nén file 500 MB.
+- **4 thao tác Finder rõ ràng (2 Nén, 2 Giải nén):**
+  - `Giải nén nhanh với UpackX` / `Giải nén… với UpackX`
+  - `Nén nhanh với UpackX` / `Nén… với UpackX`
+- **Nén ZIP Streaming chuẩn macOS:**
+  - Nén file đơn, thư mục đơn (giữ nguyên cấu trúc gốc `Photos/`), hoặc nhiều file/thư mục thành `Archive.zip`.
+  - Mức nén: Nhanh (Fast) / Tiêu chuẩn (Normal) / Tối đa (Maximum).
+  - Không sửa hoặc xóa dữ liệu nguồn.
+  - Bộ đệm 64 KB, RAM tiêu thụ < 13 MB.
+- **An toàn tuyệt đối:**
+  - Không để file nén tự lọt vào nội dung đang nén (Self-inclusion defense).
+  - Không ghi đè âm thầm dữ liệu cũ.
+  - Sử dụng file tạm staging, dọn dẹp sạch sẽ khi hủy.
+  - Bảo mật mật khẩu qua pipe standard input (`stdin`), không lộ trong danh sách process (`ps aux`).
 
-### 3. Tải về và Cài đặt
+### 3. Cài đặt
 
-Truy cập mục [GitHub Releases](https://github.com/VuPhm/UpackX/releases) để tải:
-- **Bộ cài DMG:** `UpackX-v1.2.0-macOS-Intel.dmg` (Kéo vào thư mục Applications).
-- **Bộ cài PKG:** `UpackX-v1.2.0-macOS-Intel.pkg` (Trình cài đặt native chuẩn macOS).
-
-**Lưu ý khi mở lần đầu:**
-Nhấp chuột phải vào `UpackX.app` trong thư mục Applications và chọn **Open (Mở)** để hệ thống ghi nhớ quyền chạy. Mở ứng dụng lần đầu sẽ tự động kích hoạt 2 dịch vụ chuột phải trong Finder.
-
-### 4. Gỡ cài đặt
-
-- Kéo `/Applications/UpackX.app` vào Thùng rác (Trash).
-- Hoặc chạy script dọn sạch triệt để: `./Scripts/uninstall.sh`.
+1. Tải **`UpackX-v1.3.0-macOS-Intel.dmg`** từ mục Releases.
+2. Mở DMG và kéo `UpackX.app` vào thư mục `Applications`.
+3. Nhấp chuột phải vào `UpackX.app` và chọn **Open** trong lần đầu tiên để kích hoạt Finder Services.
