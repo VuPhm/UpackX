@@ -37,6 +37,13 @@
 | **`UpackX-v1.2.1-macOS-Intel.zip`** | Portable ZIP | Standalone `.app` bundle preserving metadata via `ditto`. |
 | **`SHA256SUMS.txt`** | Text | SHA-256 verification hashes for all distribution artifacts. |
 
+#### SHA-256 Checksums
+```text
+7efc852f5c0b687e57ec44408c68be6d7093ff2262326184e0c8cb7556d4230b  UpackX-v1.2.1-macOS-Intel.dmg
+0a4643ea835ec4ef8e9966c9f763c125ba3b6b0f1fbae77a75ee2b0058ad6900  UpackX-v1.2.1-macOS-Intel.pkg
+0bea82fcf0c371cd11682caed1e6299a015d06e0348c9fb84d53082c27dc189b  UpackX-v1.2.1-macOS-Intel.zip
+```
+
 ---
 
 ### Installation & First Launch
