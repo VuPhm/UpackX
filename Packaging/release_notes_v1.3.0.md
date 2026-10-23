@@ -49,9 +49,10 @@
 
 #### SHA-256 Checksums
 ```text
-f8022012c8bcf8af3e4666553c1b4889f0cc51e6cc231f3e93a1e047d6ba7fd4  UpackX-v1.3.0-macOS-Intel.dmg
-65e3f7e3837290dd9e2a259fc4bcfa4896075cca616fa4dec23b09b8fba8cc9d  UpackX-v1.3.0-macOS-Intel.pkg
-228f498a9b9edefa33a21c90f95ed2cbd91736e690832e90e3b16bac526a0f7e  UpackX-v1.3.0-macOS-Intel.zip
+8c21995060b4b37bcb8d505bcf451d85a76189fed1050e9aae1c449262611363  UpackX-v1.3.0-macOS-Intel.dmg
+09011caa47007e5ea83a0b5663bf4c150a82df814729739efcdbaa571c7c0c25  UpackX-v1.3.0-macOS-Intel.pkg
+1608ce64293cc3fea5e40338a7f7502890ca3a043a4d9d846ba8f7a12291f416  UpackX-v1.3.0-macOS-Intel.zip
+1bbbec3edf50023e54ed046f004d8fe1a388e78f8929307a7584e77ebf0f2aec  SHA256SUMS.txt
 ```
 
 ---
