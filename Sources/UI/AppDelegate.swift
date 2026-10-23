@@ -2,33 +2,59 @@ import AppKit
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
-    private var progressControllers: [URL: ProgressWindowController] = [:]
     private var extractToController: ExtractToWindowController?
+    private var activeProgressWC: ProgressWindowController?
+    
     private var isCommandLineInvocation: Bool = false
+    private var isServiceInvocation: Bool = false
+    private var isHeadless: Bool = false
+    
+    // Sequential Queue State
+    private var taskQueue: [ExtractionTaskItem] = []
+    private var currentTaskIndex: Int = 0
+    private var queueConflictStrategy: ConflictStrategy? = nil
+    private var queueCustomDestination: URL? = nil
+    private var queueCreateEnclosing: Bool = false
+    private var completedCount: Int = 0
+    private var failedCount: Int = 0
+    private var isCancelled: Bool = false
+    private var lastDestinationURL: URL? = nil
+    
+    public override init() {
+        super.init()
+        let nonSystemArgs = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
+        if !nonSystemArgs.isEmpty {
+            self.isCommandLineInvocation = true
+        }
+    }
     
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.servicesProvider = self
         
-        // Parse launch arguments
-        let args = CommandLine.arguments
-        if args.count > 1 {
-            isCommandLineInvocation = true
-            handleCommandLineArguments(Array(args.dropFirst()))
+        let nonSystemArgs = Array(CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") })
+        if !nonSystemArgs.isEmpty {
+            handleCommandLineArguments(nonSystemArgs)
             return
         }
         
-        // Normal interactive launch: show main drag-and-drop window
-        showMainWindow()
+        // Give services and openFiles a moment to dispatch on startup
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if !self.isCommandLineInvocation && !self.isServiceInvocation && self.taskQueue.isEmpty && self.extractToController == nil {
+                self.showMainWindow()
+            }
+        }
     }
     
     private func showMainWindow() {
         if mainWindowController == nil {
             let mwc = MainWindowController()
             mwc.onFileSelected = { [weak self] url, isQuick in
+                let tasks = MultipartDetector.groupArchives([url])
                 if isQuick {
-                    self?.performQuickExtract(archiveURL: url)
+                    self?.startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
                 } else {
-                    self?.showExtractToDialog(archiveURL: url)
+                    self?.showExtractToDialogForTasks(tasks)
                 }
             }
             mainWindowController = mwc
@@ -37,19 +63,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     
-    // MARK: - Command Line / Quick Action Routing
+    // MARK: - Command Line Routing
     
     private func handleCommandLineArguments(_ args: [String]) {
         if args.contains("--install-services") {
             do {
                 try FinderIntegrationManager.shared.installQuickActions()
                 print("Finder Quick Actions installed successfully.")
-                NSApp.terminate(nil)
+                exit(0)
             } catch {
                 fputs("Error installing services: \(error.localizedDescription)\n", stderr)
                 exit(1)
             }
-            return
         }
         
         var isQuick = true
@@ -69,6 +94,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 conflictStrategy = .skip
             } else if arg == "--rename" {
                 conflictStrategy = .rename
+            } else if arg == "--headless" {
+                isHeadless = true
             } else if !arg.hasPrefix("-") {
                 filePaths.append(arg)
             }
@@ -76,89 +103,185 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         if filePaths.isEmpty {
-            showMainWindow()
+            DispatchQueue.main.async { [weak self] in
+                self?.showMainWindow()
+            }
             return
         }
         
+        isCommandLineInvocation = true
         let urls = filePaths.map { URL(fileURLWithPath: $0) }
+        let tasks = MultipartDetector.groupArchives(urls)
         
-        // Multi-part volume grouping (Stage 2 architectural integration)
-        let (primaryURLs, _) = MultipartDetector.groupArchives(urls)
-        
-        for url in primaryURLs {
-            if isQuick {
-                performQuickExtract(archiveURL: url, explicitConflictStrategy: conflictStrategy)
-            } else {
-                showExtractToDialog(archiveURL: url)
-            }
+        if isQuick {
+            startSequentialExtraction(tasks: tasks, explicitConflictStrategy: conflictStrategy)
+        } else {
+            showExtractToDialogForTasks(tasks)
         }
     }
     
     // MARK: - Open Files (Finder Double-click or Open With)
     
     public func application(_ application: NSApplication, openFiles filenames: [String]) {
+        guard !isCommandLineInvocation else { return }
         let urls = filenames.map { URL(fileURLWithPath: $0) }
-        let (primaryURLs, _) = MultipartDetector.groupArchives(urls)
-        
-        for url in primaryURLs {
-            // Default action on double-click/open: Quick Extract
-            performQuickExtract(archiveURL: url)
-        }
+        let tasks = MultipartDetector.groupArchives(urls)
+        startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
     }
     
     // MARK: - Cocoa NSServices Endpoints
     
     @objc public func quickExtractService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
-        guard let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty else {
+        isServiceInvocation = true
+        let urls = extractURLs(from: pboard)
+        guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hợp lệ trong pasteboard." as NSString
             return
         }
-        let (primaryURLs, _) = MultipartDetector.groupArchives(urls)
-        for url in primaryURLs {
-            performQuickExtract(archiveURL: url)
-        }
+        let tasks = MultipartDetector.groupArchives(urls)
+        startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
     }
     
     @objc public func extractToService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
-        guard let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty else {
+        isServiceInvocation = true
+        let urls = extractURLs(from: pboard)
+        guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hợp lệ trong pasteboard." as NSString
             return
         }
-        let (primaryURLs, _) = MultipartDetector.groupArchives(urls)
-        for url in primaryURLs {
-            showExtractToDialog(archiveURL: url)
-        }
+        let tasks = MultipartDetector.groupArchives(urls)
+        showExtractToDialogForTasks(tasks)
     }
     
-    // MARK: - Extraction Workflows
+    private func extractURLs(from pboard: NSPasteboard) -> [URL] {
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [
+            NSPasteboard.ReadingOptionKey.urlReadingFileURLsOnly: true
+        ]) as? [URL], !urls.isEmpty {
+            return urls
+        }
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
+            return urls
+        }
+        let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        if let files = pboard.propertyList(forType: filenamesType) as? [String] {
+            return files.map { URL(fileURLWithPath: $0) }
+        }
+        if let items = pboard.pasteboardItems {
+            var results: [URL] = []
+            for item in items {
+                if let string = item.string(forType: .fileURL), let url = URL(string: string) {
+                    results.append(url)
+                } else if let string = item.string(forType: filenamesType) {
+                    results.append(URL(fileURLWithPath: string))
+                }
+            }
+            if !results.isEmpty {
+                return results
+            }
+        }
+        return []
+    }
     
-    public func performQuickExtract(archiveURL: URL, explicitConflictStrategy: ConflictStrategy? = nil) {
-        let progressWC: ProgressWindowController? = isCommandLineInvocation ? nil : ProgressWindowController(archiveName: archiveURL.lastPathComponent)
-        if let wc = progressWC {
-            progressControllers[archiveURL] = wc
-            wc.showWindow(nil)
+    // MARK: - Queue & Extraction Workflows
+    
+    public func startSequentialExtraction(
+        tasks: [ExtractionTaskItem],
+        explicitConflictStrategy: ConflictStrategy?,
+        customDestination: URL? = nil,
+        createEnclosingFolder: Bool = false
+    ) {
+        guard !tasks.isEmpty else {
+            checkTerminationIfNeeded()
+            return
         }
         
-        var cancelled = false
-        progressWC?.onCancel = {
-            cancelled = true
+        self.taskQueue = tasks
+        self.currentTaskIndex = 0
+        self.queueConflictStrategy = explicitConflictStrategy
+        self.queueCustomDestination = customDestination
+        self.queueCreateEnclosing = createEnclosingFolder
+        self.completedCount = 0
+        self.failedCount = 0
+        self.isCancelled = false
+        
+        processNextQueueItem()
+    }
+    
+    private func processNextQueueItem() {
+        guard !isCancelled else {
+            finishQueue()
+            return
         }
         
-        let parentDir = archiveURL.deletingLastPathComponent()
-        let strategy = explicitConflictStrategy ?? (isCommandLineInvocation ? .rename : .ask)
+        guard currentTaskIndex < taskQueue.count else {
+            finishQueue()
+            return
+        }
+        
+        let task = taskQueue[currentTaskIndex]
+        let archiveURL = task.archiveURL
+        let total = taskQueue.count
+        
+        // 1. Multipart integrity validation
+        if task.isMultipart, let group = task.multipartGroup, !group.isComplete {
+            let missingList = group.missingPartNames.joined(separator: ", ")
+            let err = ExtractionError.corruptedArchive("Bộ nén chia phần '\(group.baseName)' không hoàn chỉnh. Thiếu các file volume: \(missingList)")
+            NotificationHelper.shared.notifyFailure(archiveName: archiveURL.lastPathComponent, error: err)
+            failedCount += 1
+            
+            if isCommandLineInvocation {
+                fputs("UpackX Error (\(archiveURL.lastPathComponent)): \(err.localizedDescription)\n", stderr)
+            } else if !isHeadless {
+                let alert = NSAlert(error: err)
+                alert.runModal()
+            }
+            
+            // Advance to next archive in queue (one failure does not cancel entire batch)
+            currentTaskIndex += 1
+            DispatchQueue.main.async { [weak self] in
+                self?.processNextQueueItem()
+            }
+            return
+        }
+        
+        // 2. Prepare Progress HUD
+        let displayName: String
+        if total > 1 {
+            displayName = "[\(currentTaskIndex + 1)/\(total)] \(archiveURL.lastPathComponent)"
+        } else {
+            displayName = archiveURL.lastPathComponent
+        }
+        
+        let progressWC: ProgressWindowController?
+        if isHeadless {
+            progressWC = nil
+        } else {
+            progressWC = ProgressWindowController(archiveName: displayName)
+            self.activeProgressWC = progressWC
+            progressWC?.showWindow(nil)
+        }
+        
+        progressWC?.onCancel = { [weak self] in
+            self?.isCancelled = true
+        }
+        
+        // 3. Configure extraction options
+        let destDir = queueCustomDestination ?? archiveURL.deletingLastPathComponent()
+        let strategy = queueConflictStrategy ?? (isCommandLineInvocation && isHeadless ? .skip : .ask)
         
         let options = ExtractionOptions(
-            destinationDirectory: parentDir,
-            createEnclosingFolder: false, // Requirement 2.2.A: No enclosing folder
+            destinationDirectory: destDir,
+            createEnclosingFolder: queueCreateEnclosing,
             conflictStrategy: strategy,
-            conflictResolver: isCommandLineInvocation ? nil : { ConflictDialog.prompt(for: $0) }
+            conflictResolver: isHeadless ? nil : { ConflictDialog.prompt(for: $0) },
+            passwordProvider: isHeadless ? nil : { PasswordDialog.prompt(for: archiveURL) }
         )
         
         ExtractionManager.shared.execute(
             archiveURL: archiveURL,
             options: options,
-            progress: { [weak progressWC] progress in
-                if cancelled || (progressWC?.isCancelled ?? false) {
+            progress: { [weak self, weak progressWC] progress in
+                if self?.isCancelled ?? false || (progressWC?.isCancelled ?? false) {
                     return false
                 }
                 progressWC?.update(progress: progress)
@@ -167,52 +290,79 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             completion: { [weak self, weak progressWC] result in
                 guard let self = self else { return }
                 progressWC?.close()
-                self.progressControllers.removeValue(forKey: archiveURL)
+                self.activeProgressWC = nil
                 
                 switch result {
                 case .success(let extractionResult):
-                    NotificationHelper.shared.notifySuccess(
-                        archiveName: archiveURL.lastPathComponent,
-                        destinationURL: extractionResult.destinationURL,
-                        extractedCount: extractionResult.extractedCount,
-                        elapsedTime: extractionResult.elapsedTime
-                    )
+                    self.completedCount += 1
+                    self.lastDestinationURL = extractionResult.destinationURL
+                    if total == 1 {
+                        NotificationHelper.shared.notifySuccess(
+                            archiveName: archiveURL.lastPathComponent,
+                            destinationURL: extractionResult.destinationURL,
+                            extractedCount: extractionResult.extractedCount,
+                            elapsedTime: extractionResult.elapsedTime
+                        )
+                    }
                     if self.isCommandLineInvocation {
                         print("UpackX: Extracted \(extractionResult.extractedCount) files to \(extractionResult.destinationURL.path)")
-                        exit(0)
                     }
+                    
                 case .failure(let err):
                     if case ExtractionError.cancelled = err {
+                        self.isCancelled = true
                         if self.isCommandLineInvocation {
                             fputs("UpackX: Extraction cancelled.\n", stderr)
-                            exit(130)
                         }
                     } else {
+                        self.failedCount += 1
                         NotificationHelper.shared.notifyFailure(archiveName: archiveURL.lastPathComponent, error: err)
                         if self.isCommandLineInvocation {
-                            fputs("UpackX Error: \(err.localizedDescription)\n", stderr)
-                            exit(1)
-                        } else {
+                            fputs("UpackX Error (\(archiveURL.lastPathComponent)): \(err.localizedDescription)\n", stderr)
+                        } else if !self.isHeadless {
                             let alert = NSAlert(error: err)
                             alert.runModal()
                         }
                     }
                 }
                 
-                self.checkTerminationIfNeeded()
+                self.currentTaskIndex += 1
+                self.processNextQueueItem()
             }
         )
     }
     
-    public func showExtractToDialog(archiveURL: URL) {
-        let dialog = ExtractToWindowController(archiveURL: archiveURL)
+    private func finishQueue() {
+        let total = taskQueue.count
+        if total > 1 {
+            NotificationHelper.shared.notifyBatchSummary(completed: completedCount, failed: failedCount, lastDestinationURL: lastDestinationURL)
+        }
+        
+        taskQueue.removeAll()
+        checkTerminationIfNeeded()
+    }
+    
+    public func showExtractToDialogForTasks(_ tasks: [ExtractionTaskItem]) {
+        guard let firstTask = tasks.first else {
+            checkTerminationIfNeeded()
+            return
+        }
+        
+        let dialog = ExtractToWindowController(archiveURL: firstTask.archiveURL, totalArchives: tasks.count)
         self.extractToController = dialog
         
         dialog.onConfirm = { [weak self] options in
-            self?.executeWithOptions(archiveURL: archiveURL, options: options)
+            self?.extractToController = nil
+            self?.startSequentialExtraction(
+                tasks: tasks,
+                explicitConflictStrategy: options.conflictStrategy,
+                customDestination: options.destinationDirectory,
+                createEnclosingFolder: options.createEnclosingFolder
+            )
         }
         
         dialog.onCancel = { [weak self] in
+            self?.extractToController = nil
             self?.checkTerminationIfNeeded()
         }
         
@@ -220,58 +370,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     
-    private func executeWithOptions(archiveURL: URL, options: ExtractionOptions) {
-        let progressWC = ProgressWindowController(archiveName: archiveURL.lastPathComponent)
-        progressControllers[archiveURL] = progressWC
-        progressWC.showWindow(nil)
-        
-        var cancelled = false
-        progressWC.onCancel = {
-            cancelled = true
-        }
-        
-        ExtractionManager.shared.extractTo(
-            archiveURL: archiveURL,
-            options: options,
-            progress: { [weak progressWC] progress in
-                if cancelled || (progressWC?.isCancelled ?? false) {
-                    return false
-                }
-                progressWC?.update(progress: progress)
-                return true
-            },
-            completion: { [weak self, weak progressWC] result in
-                guard let self = self else { return }
-                progressWC?.close()
-                self.progressControllers.removeValue(forKey: archiveURL)
-                
-                switch result {
-                case .success(let extractionResult):
-                    NotificationHelper.shared.notifySuccess(
-                        archiveName: archiveURL.lastPathComponent,
-                        destinationURL: extractionResult.destinationURL,
-                        extractedCount: extractionResult.extractedCount,
-                        elapsedTime: extractionResult.elapsedTime
-                    )
-                case .failure(let err):
-                    if case ExtractionError.cancelled = err {
-                        // Cancelled by user
-                    } else {
-                        NotificationHelper.shared.notifyFailure(archiveName: archiveURL.lastPathComponent, error: err)
-                        let alert = NSAlert(error: err)
-                        alert.runModal()
-                    }
-                }
-                
-                self.checkTerminationIfNeeded()
-            }
-        )
-    }
-    
     private func checkTerminationIfNeeded() {
-        if isCommandLineInvocation && progressControllers.isEmpty && extractToController == nil {
-            // CLI/Quick Action operation complete: terminate cleanly
-            NSApp.terminate(nil)
+        if (isCommandLineInvocation || isServiceInvocation) && activeProgressWC == nil && extractToController == nil && taskQueue.isEmpty {
+            if isCommandLineInvocation {
+                exit(failedCount > 0 ? 1 : (isCancelled ? 130 : 0))
+            } else {
+                NSApp.terminate(nil)
+            }
         }
     }
 }

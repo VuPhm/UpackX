@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Background Squircle Gradient: Graphite / Dark Slate -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#282F3B"/>
+      <stop offset="40%" stop-color="#1E232C"/>
+      <stop offset="100%" stop-color="#13161C"/>
+    </linearGradient>
+
+    <!-- Squircle Top Specular Highlight -->
+    <linearGradient id="specularGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Box Left Face Gradient (Crisp Platinum Silver) -->
+    <linearGradient id="boxLeftGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#D6DEE8"/>
+    </linearGradient>
+
+    <!-- Box Right Face Gradient (Slightly deeper neutral for 3D depth) -->
+    <linearGradient id="boxRightGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E2E8F0"/>
+      <stop offset="100%" stop-color="#BAC7D5"/>
+    </linearGradient>
+
+    <!-- Left Flap Gradient (Opening outward) -->
+    <linearGradient id="flapLeftGrad" x1="0%" y1="100%" x2="50%" y2="0%">
+      <stop offset="0%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#F1F5F9"/>
+    </linearGradient>
+
+    <!-- Right Flap Gradient (Opening outward) -->
+    <linearGradient id="flapRightGrad" x1="0%" y1="100%" x2="50%" y2="0%">
+      <stop offset="0%" stop-color="#94A3B8"/>
+      <stop offset="100%" stop-color="#E2E8F0"/>
+    </linearGradient>
+
+    <!-- Interior Extraction Glow (Cyan / Sky Accent) -->
+    <linearGradient id="glowGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0284C7" stop-opacity="0.8"/>
+      <stop offset="60%" stop-color="#38BDF8" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#7DD3FC" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- Cyan Accent / Zipper Pull -->
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <!-- Shadow Filter for Squircle Base -->
+    <filter id="squircleShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+
+    <!-- Shadow Filter for Open Lid Flaps -->
+    <filter id="flapShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#080B10" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- 1. Base Squircle (Standard macOS 824x824 at 100,100 with rx=185) -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185"
+        fill="url(#bgGrad)" filter="url(#squircleShadow)"/>
+
+  <!-- Squircle Border & Specular highlight -->
+  <rect x="101" y="101" width="822" height="822" rx="184" ry="184"
+        fill="none" stroke="url(#specularGrad)" stroke-width="2"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185"
+        fill="none" stroke="#000000" stroke-opacity="0.3" stroke-width="1.5"/>
+
+  <!-- 2. Interior Uncompressed Glow & Ray (Appearing from within the parting box) -->
+  <g>
+    <!-- Interior cavity / upward glow wedge -->
+    <polygon points="410,470 512,300 614,470" fill="url(#glowGrad)"/>
+    <!-- Unpack extraction arrow / rising crystal symbol -->
+    <polygon points="512,270 472,340 496,340 496,430 528,430 528,340 552,340"
+             fill="#FFFFFF" opacity="0.95"/>
+  </g>
+
+  <!-- 3. Open Lid Flaps (Parting Left & Right) -->
+  <!-- Left Lid Flap -->
+  <polygon points="280,480 230,310 470,360 496,480"
+           fill="url(#flapLeftGrad)" filter="url(#flapShadow)"/>
+  <!-- Left flap lip highlight -->
+  <line x1="230" y1="310" x2="470" y2="360" stroke="#FFFFFF" stroke-width="3" opacity="0.8"/>
+
+  <!-- Right Lid Flap -->
+  <polygon points="528,480 554,360 794,310 744,480"
+           fill="url(#flapRightGrad)" filter="url(#flapShadow)"/>
+  <!-- Right flap lip highlight -->
+  <line x1="554" y1="360" x2="794" y2="310" stroke="#FFFFFF" stroke-width="3" opacity="0.7"/>
+
+  <!-- 4. Main Storage Box Body (Split in two halves by central seam) -->
+  <!-- Left Box Body -->
+  <path d="M 280,480 L 496,480 L 496,750 C 496,762 486,772 474,772 L 320,772 C 298,772 280,754 280,732 Z"
+        fill="url(#boxLeftGrad)"/>
+
+  <!-- Right Box Body -->
+  <path d="M 528,480 L 744,480 L 744,732 C 744,754 726,772 704,772 L 550,772 C 538,772 528,762 528,750 Z"
+        fill="url(#boxRightGrad)"/>
+
+  <!-- Box Top Chamfer / Rim Line -->
+  <line x1="280" y1="482" x2="496" y2="482" stroke="#FFFFFF" stroke-width="2.5" opacity="0.9"/>
+  <line x1="528" y1="482" x2="744" y2="482" stroke="#FFFFFF" stroke-width="2.5" opacity="0.8"/>
+
+  <!-- 5. Central Zipper / Parting Seam -->
+  <!-- Seam channel -->
+  <rect x="498" y="480" width="28" height="292" rx="4" ry="4" fill="#13171F" opacity="0.75"/>
+
+  <!-- Zipper teeth (crisp minimalist notches) -->
+  <g stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" opacity="0.85">
+    <line x1="504" y1="520" x2="512" y2="520"/>
+    <line x1="512" y1="540" x2="520" y2="540"/>
+    <line x1="504" y1="560" x2="512" y2="560"/>
+    <line x1="512" y1="580" x2="520" y2="580"/>
+    <line x1="504" y1="600" x2="512" y2="600"/>
+    <line x1="512" y1="620" x2="520" y2="620"/>
+    <line x1="504" y1="640" x2="512" y2="640"/>
+    <line x1="512" y1="660" x2="520" y2="660"/>
+    <line x1="504" y1="680" x2="512" y2="680"/>
+    <line x1="512" y1="700" x2="520" y2="700"/>
+    <line x1="504" y1="720" x2="512" y2="720"/>
+    <line x1="512" y1="740" x2="520" y2="740"/>
+  </g>
+
+  <!-- Precision Zipper Slider (Positioned at top seam junction, parted open) -->
+  <path d="M 500,474 L 524,474 L 520,502 L 504,502 Z" fill="url(#accentGrad)"/>
+  <!-- Pull tab ring -->
+  <circle cx="512" cy="510" r="4.5" fill="#FFFFFF"/>
+</svg>

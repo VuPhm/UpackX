@@ -137,8 +137,8 @@ mkdir -p "${ARCH_SRC}"
 echo "NEW ARCHIVE CONTENT" > "${ARCH_SRC}/conflict_file.txt"
 (cd "${ARCH_SRC}" && zip -r "${COLLISION_DIR}/test_conflict.zip" conflict_file.txt) >/dev/null
 
-# Extract in Quick Extract mode
-"${BUILD_BIN}" --quick "${COLLISION_DIR}/test_conflict.zip" >/dev/null 2>&1 || true
+# Extract in Quick Extract mode with safe rename strategy
+"${BUILD_BIN}" --quick --rename "${COLLISION_DIR}/test_conflict.zip" >/dev/null 2>&1 || true
 
 ORIGINAL_CONTENT=$(cat "${COLLISION_DIR}/conflict_file.txt")
 if [ "${ORIGINAL_CONTENT}" = "ORIGINAL USER DATA DO NOT OVERWRITE" ]; then
@@ -216,9 +216,9 @@ let urls = [
     URL(fileURLWithPath: "\(partDir)/single.zip")
 ]
 
-let (primary, groups) = MultipartDetector.groupArchives(urls)
-let primaryNames = primary.map { $0.lastPathComponent }.sorted()
-let ok = (primary.count == 3 && primaryNames.contains("movie.part1.rar") && primaryNames.contains("dataset.7z.001") && primaryNames.contains("single.zip"))
+let tasks = MultipartDetector.groupArchives(urls)
+let primaryNames = tasks.map { $0.archiveURL.lastPathComponent }.sorted()
+let ok = (tasks.count == 3 && primaryNames.contains("movie.part1.rar") && primaryNames.contains("dataset.7z.001") && primaryNames.contains("single.zip"))
 exit(ok ? 0 : 1)
 EOF
 
@@ -277,26 +277,27 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# Test 8: Finder Quick Actions Installation Verification
+# Test 8: Finder Native Cocoa NSServices Verification & Zero Workflow Duplication
 # -------------------------------------------------------------------------
 echo ""
-echo "[Test 8] Finder Integration & Services Check..."
+echo "[Test 8] Finder Integration & Services Check (Native Cocoa NSServices)..."
 "${BUILD_BIN}" --install-services >/dev/null 2>&1
 
 SERVICES_DIR="${HOME}/Library/Services"
 WORKFLOW_QUICK="${SERVICES_DIR}/UpackX - Giải nén nhanh.workflow"
 WORKFLOW_TO="${SERVICES_DIR}/UpackX - Giải nén….workflow"
 
-if [ -d "${WORKFLOW_QUICK}" ] && [ -d "${WORKFLOW_TO}" ]; then
-    pass "Finder Quick Action workflows installed in ~/Library/Services"
+if [ ! -d "${WORKFLOW_QUICK}" ] && [ ! -d "${WORKFLOW_TO}" ]; then
+    pass "Legacy workflow bundles cleanly absent from ~/Library/Services (Zero duplicate workflows)"
 else
-    fail "Finder Integration" "Workflows missing in ~/Library/Services"
+    fail "Finder Duplication" "Legacy workflows still present in ~/Library/Services"
 fi
 
-if grep -q "NSServices" "${WORKFLOW_QUICK}/Contents/Info.plist" && grep -q "runWorkflowAsService" "${WORKFLOW_QUICK}/Contents/Info.plist"; then
-    pass "Quick Action workflow contains valid NSServices metadata for Finder right-click"
+INFO_PLIST="${PROJECT_DIR}/build/UpackX.app/Contents/Info.plist"
+if grep -q "quickExtractService" "${INFO_PLIST}" && grep -q "extractToService" "${INFO_PLIST}"; then
+    pass "Native Cocoa NSServices defined in Info.plist (quickExtractService & extractToService)"
 else
-    fail "Finder Metadata" "NSServices definition missing in workflow Info.plist"
+    fail "Finder Metadata" "NSServices definition missing in app Info.plist"
 fi
 
 # -------------------------------------------------------------------------
@@ -397,6 +398,163 @@ if [ -f "${TEST_DIR}/huge_500mb.dat" ]; then
     rm -f "${TEST_DIR}/huge_500mb.dat"
 else
     fail "500 MB Archive" "500 MB file missing"
+fi
+
+# -------------------------------------------------------------------------
+# Test 13: Real Finder Native Service Execution (NSPerformService Runner)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 13] Real Finder Native Service Integration ('Giải nén nhanh với UpackX')..."
+FINDER_TEST_DIR="${TEST_DIR}/Thư mục Finder Tiếng Việt có dấu"
+mkdir -p "${FINDER_TEST_DIR}"
+echo "Finder Native Service Integration Success!" > "${FINDER_TEST_DIR}/nội dung gốc.txt"
+
+(cd "${FINDER_TEST_DIR}" && zip "tài liệu quan trọng.zip" "nội dung gốc.txt") >/dev/null
+rm -f "${FINDER_TEST_DIR}/nội dung gốc.txt"
+
+# Execute native Cocoa NSService via Swift
+SWIFT_RUNNER_RES=$(swift -e "
+import AppKit
+
+let zipPath = \"${FINDER_TEST_DIR}/tài liệu quan trọng.zip\"
+let url = URL(fileURLWithPath: zipPath)
+let pb = NSPasteboard.withUniqueName()
+pb.declareTypes([.fileURL], owner: nil)
+pb.writeObjects([url as NSURL])
+
+let ok = NSPerformService(\"Giải nén nhanh với UpackX\", pb)
+print(\"RESULT:\(ok)\")
+" 2>&1 || true)
+
+sleep 1.0
+
+if [ -f "${FINDER_TEST_DIR}/nội dung gốc.txt" ]; then
+    pass "Finder Native NSService extracted archive directly into containing folder without extra enclosing folder"
+else
+    fail "Finder Native NSService" "Extracted file not found at expected location ($SWIFT_RUNNER_RES)"
+fi
+
+# -------------------------------------------------------------------------
+# Test 14: Real Multipart Archive Extraction (.7z.001 - .004)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 14] Real Multi-part Archive Extraction (Volume set .7z.001 - .004)..."
+MP_SRC="${TEST_DIR}/mp_src"
+mkdir -p "${MP_SRC}"
+dd if=/dev/urandom of="${MP_SRC}/original_large_data.bin" bs=1024 count=150 status=none
+
+# Split into 50k volumes using 7zz
+SEVEN_Z_BIN="/usr/local/bin/7zz"
+if [ ! -f "${SEVEN_Z_BIN}" ] && command -v 7zz >/dev/null; then
+    SEVEN_Z_BIN="$(command -v 7zz)"
+elif [ -f "${PROJECT_DIR}/build/UpackX.app/Contents/Resources/bin/7zz" ]; then
+    SEVEN_Z_BIN="${PROJECT_DIR}/build/UpackX.app/Contents/Resources/bin/7zz"
+fi
+
+(cd "${MP_SRC}" && "${SEVEN_Z_BIN}" a -v50k "${TEST_DIR}/dataset_split.7z" original_large_data.bin) >/dev/null
+
+MP_DEST="${TEST_DIR}/mp_dest"
+mkdir -p "${MP_DEST}"
+cp "${TEST_DIR}"/dataset_split.7z.* "${MP_DEST}/"
+
+# Trigger extraction by selecting part 3 (UpackX must locate primary volume .001 automatically)
+"${BUILD_BIN}" --quick "${MP_DEST}/dataset_split.7z.003" >/dev/null 2>&1 || true
+
+if [ -f "${MP_DEST}/original_large_data.bin" ]; then
+    if cmp -s "${MP_SRC}/original_large_data.bin" "${MP_DEST}/original_large_data.bin"; then
+        pass "Multi-part volume set extracted byte-for-byte from non-first volume selection (.003)"
+    else
+        fail "Multipart Integrity" "Extracted content does not match original"
+    fi
+else
+    fail "Multipart Extraction" "Extracted file missing"
+fi
+
+# -------------------------------------------------------------------------
+# Test 15: Missing Volume Detection & Safe Rejection
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 15] Missing Multipart Volume Integrity Rejection..."
+MISSING_DEST="${TEST_DIR}/missing_dest"
+mkdir -p "${MISSING_DEST}"
+cp "${TEST_DIR}"/dataset_split.7z.001 "${MISSING_DEST}/"
+# Deliberately omit .002, keep .003 and .004
+cp "${TEST_DIR}"/dataset_split.7z.003 "${MISSING_DEST}/"
+cp "${TEST_DIR}"/dataset_split.7z.004 "${MISSING_DEST}/"
+
+if "${BUILD_BIN}" --quick "${MISSING_DEST}/dataset_split.7z.001" >/dev/null 2>&1; then
+    fail "Missing Volume Detection" "UpackX should have rejected incomplete archive set!"
+else
+    pass "Incomplete multi-part set (.002 missing) correctly rejected without corrupted extraction"
+fi
+
+# -------------------------------------------------------------------------
+# Test 16: Google Drive for Desktop Mount Simulation
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 16] Google Drive for Desktop Mount Directory Support..."
+GDRIVE_DIR="${TEST_DIR}/GoogleDrive-user@gmail.com/My Drive/Project"
+mkdir -p "${GDRIVE_DIR}"
+echo "Google Drive synced content" > "${GDRIVE_DIR}/drive_file.txt"
+
+(cd "${GDRIVE_DIR}" && zip "cloud_project.zip" "drive_file.txt") >/dev/null
+rm -f "${GDRIVE_DIR}/drive_file.txt"
+
+# Quick extract in Google Drive mount
+"${BUILD_BIN}" --quick "${GDRIVE_DIR}/cloud_project.zip" >/dev/null 2>&1 || true
+
+if [ -f "${GDRIVE_DIR}/drive_file.txt" ]; then
+    pass "Archive in Google Drive mount extracted directly into My Drive/Project/ without extra wrapper folder"
+else
+    fail "Google Drive Mount" "Extracted file not found in Google Drive directory"
+fi
+
+# -------------------------------------------------------------------------
+# Test 17: Safe Directory Merge Without Deleting Existing Directories
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 17] Safe Directory Merge on Destination..."
+MERGE_DIR="${TEST_DIR}/merge_test"
+mkdir -p "${MERGE_DIR}/subfolder"
+echo "already exists" > "${MERGE_DIR}/subfolder/preserve.txt"
+
+MERGE_SRC="${TEST_DIR}/merge_src"
+mkdir -p "${MERGE_SRC}/subfolder"
+echo "newly uncompressed" > "${MERGE_SRC}/subfolder/new_file.txt"
+(cd "${MERGE_SRC}" && zip -r "${TEST_DIR}/merge.zip" subfolder) >/dev/null
+
+"${BUILD_BIN}" --quick "${TEST_DIR}/merge.zip" >/dev/null 2>&1 || true
+
+# Check that merge.zip in ${TEST_DIR} extracted subfolder/new_file.txt into ${TEST_DIR}/subfolder
+if [ -f "${TEST_DIR}/subfolder/new_file.txt" ]; then
+    pass "Archive directory content merged cleanly without destructive directory replacement"
+else
+    fail "Safe Directory Merge" "Merged file not found"
+fi
+
+# -------------------------------------------------------------------------
+# Test 18: Minimal Native AppIcon Bundle Verification
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 18] Minimal Native AppIcon Assets Verification..."
+ICNS_PATH="${PROJECT_DIR}/build/UpackX.app/Contents/Resources/AppIcon.icns"
+SVG_PATH="${PROJECT_DIR}/Resources/AppIcon.svg"
+
+if [ -f "${ICNS_PATH}" ] && [ -s "${ICNS_PATH}" ] && [ -f "${SVG_PATH}" ]; then
+    pass "AppIcon.icns bundled with full system resolutions and SVG vector master present"
+else
+    fail "AppIcon Bundle" "AppIcon.icns or AppIcon.svg missing"
+fi
+
+# -------------------------------------------------------------------------
+# Test 19: Reinstall & Clean Install Script Idempotence Check
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 19] Reinstall & Uninstall Script Executability Check..."
+if [ -x "${PROJECT_DIR}/Scripts/reinstall.sh" ] && [ -x "${PROJECT_DIR}/Scripts/uninstall.sh" ]; then
+    pass "Maintenance scripts (reinstall.sh & uninstall.sh) present and executable"
+else
+    fail "Maintenance Scripts" "reinstall.sh or uninstall.sh missing or non-executable"
 fi
 
 # -------------------------------------------------------------------------

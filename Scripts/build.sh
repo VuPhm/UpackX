@@ -29,6 +29,13 @@ swiftc -O \
     ${SWIFT_FILES} \
     -o "${MACOS_DIR}/UpackX"
 
+# Ensure AppIcon.icns is up to date and copied
+if [ ! -f "${PROJECT_DIR}/Resources/AppIcon.icns" ]; then
+    echo "Generating AppIcon.icns..."
+    "${PROJECT_DIR}/Scripts/generate_icons.swift"
+fi
+cp "${PROJECT_DIR}/Resources/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+
 # Copy Info.plist and PkgInfo
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 echo "APPL????" > "${APP_DIR}/Contents/PkgInfo"

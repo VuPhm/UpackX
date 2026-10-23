@@ -53,6 +53,7 @@ public final class MainWindowController: NSWindowController {
         selectFileButton.action = #selector(selectFileClicked)
         contentView.addSubview(selectFileButton)
         
+        installFinderButton.title = "Kích hoạt Finder Services"
         installFinderButton.frame = NSRect(x: 220, y: 16, width: 220, height: 32)
         installFinderButton.bezelStyle = .rounded
         installFinderButton.target = self
@@ -74,16 +75,16 @@ public final class MainWindowController: NSWindowController {
     
     @objc private func installFinderClicked() {
         do {
-            try FinderIntegrationManager.shared.installQuickActions()
+            try FinderIntegrationManager.shared.installServices()
             let alert = NSAlert()
-            alert.messageText = "Đã cài đặt Finder Quick Actions!"
-            alert.informativeText = "Hai thao tác:\n1. 'Giải nén nhanh với UpackX'\n2. 'Giải nén… với UpackX'\nđã được thêm vào menu chuột phải (Quick Actions / Thao tác nhanh) trong Finder."
+            alert.messageText = "Đã kích hoạt Finder Services!"
+            alert.informativeText = "Đã thiết lập đúng 2 thao tác trong menu chuột phải của Finder:\n1. 'Giải nén nhanh với UpackX'\n2. 'Giải nén… với UpackX'"
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Lỗi cài đặt Finder Actions"
+            alert.messageText = "Lỗi kích hoạt Finder Services"
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .critical
             alert.addButton(withTitle: "OK")

@@ -1,4 +1,4 @@
-.PHONY: all build install test clean
+.PHONY: all build install uninstall test clean
 
 all: build
 
@@ -8,9 +8,16 @@ build:
 install: build
 	@./Scripts/install.sh
 
+uninstall:
+	@./Scripts/uninstall.sh
+
+reinstall:
+	@./Scripts/reinstall.sh
+
 test: build
 	@./Scripts/run_tests.sh
 
 clean:
 	rm -rf build
 	rm -rf /tmp/upackx_test*
+

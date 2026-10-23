@@ -232,7 +232,16 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             }
             
             if isDir {
-                try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+                var isExistingDir: ObjCBool = false
+                if fm.fileExists(atPath: targetURL.path, isDirectory: &isExistingDir) {
+                    if !isExistingDir.boolValue {
+                        try? fm.removeItem(at: targetURL)
+                        try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+                    }
+                    // If directory already exists, preserve it and merge contents safely
+                } else {
+                    try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+                }
                 continue
             }
             
@@ -258,12 +267,16 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             
             // Conflict handling
             var finalDestinationURL = targetURL
-            if fm.fileExists(atPath: targetURL.path) {
-                let action: ConflictAction
-                
-                if let activeDecision = currentConflictDecision, activeDecision.applyToAll {
-                    action = activeDecision.action
+            var isTargetDirectory: ObjCBool = false
+            if fm.fileExists(atPath: targetURL.path, isDirectory: &isTargetDirectory) {
+                if isTargetDirectory.boolValue {
+                    // Path is an existing directory: merge/preserve by auto-renaming the conflicting file
+                    finalDestinationURL = generateNonConflictingURL(for: targetURL)
                 } else {
+                    let action: ConflictAction
+                    if let activeDecision = currentConflictDecision, activeDecision.applyToAll {
+                        action = activeDecision.action
+                    } else {
                     switch options.conflictStrategy {
                     case .overwrite:
                         action = .overwrite
@@ -279,8 +292,8 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                             }
                             action = decision.action
                         } else {
-                            // Default to safe rename if no resolver provided, NEVER silent overwrite!
-                            action = .rename
+                            // If conflict cannot be prompted interactively, skip the file safely (Requirement 0.3)
+                            action = .skip
                         }
                     }
                 }
@@ -295,6 +308,7 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                     finalDestinationURL = generateNonConflictingURL(for: targetURL)
                 case .overwrite:
                     finalDestinationURL = targetURL
+                }
                 }
             }
             
@@ -368,13 +382,8 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             }
             
             if writeSucceeded {
-                // If destination file already existed and we are overwriting, remove original
-                if fm.fileExists(atPath: finalDestinationURL.path) {
-                    try? fm.removeItem(at: finalDestinationURL)
-                }
-                
-                // Atomically move temp file to destination
-                try fm.moveItem(at: tempPartURL, to: finalDestinationURL)
+                // Safely commit file with cloud/virtual mount fallback
+                try GoogleDriveHelper.safeCommitFile(from: tempPartURL, to: finalDestinationURL)
                 currentPartialURL = nil
                 
                 // Restore permissions if valid

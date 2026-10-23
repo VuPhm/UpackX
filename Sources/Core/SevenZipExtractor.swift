@@ -165,7 +165,7 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         
         let outPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = Pipe()
+        process.standardError = outPipe
         
         try process.run()
         
@@ -174,6 +174,7 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         
         var cancelled = false
         var buffer = Data()
+        var allOutput = ""
         let extractedBytes: Int64 = 0
         
         while process.isRunning {
@@ -183,6 +184,9 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
                 continue
             }
             buffer.append(chunk)
+            if let str = String(data: chunk, encoding: .utf8) {
+                allOutput += str
+            }
             
             // Parse progress output from 7zz
             while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\r")) ?? buffer.firstIndex(of: UInt8(ascii: "\n")) {
@@ -212,6 +216,12 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
             if cancelled { break }
         }
         
+        // Read any remaining data after exit
+        let remaining = outHandle.readDataToEndOfFile()
+        if let str = String(data: remaining, encoding: .utf8) {
+            allOutput += str
+        }
+        
         process.waitUntilExit()
         
         if cancelled {
@@ -219,6 +229,10 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         }
         
         if process.terminationStatus != 0 {
+            let lower = allOutput.lowercased()
+            if lower.contains("wrong password") || lower.contains("enter password") || lower.contains("encrypted archive") {
+                throw ExtractionError.passwordRequired
+            }
             if process.terminationStatus == 2 {
                 throw ExtractionError.corruptedArchive("7zz báo lỗi file nén (exit code 2)")
             }

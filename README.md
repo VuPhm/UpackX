@@ -1,117 +1,155 @@
-# UpackX — Lightweight macOS Archive Extractor (Intel x86_64)
+# UpackX v1.2.0 — Lightweight macOS Archive Extractor (Intel x86_64)
 
-**UpackX** là ứng dụng giải nén native siêu nhẹ, ổn định dành riêng cho **MacBook Intel (x86_64)**, tích hợp trực tiếp vào menu chuột phải trong Finder của macOS (Sonoma 14+ / Ventura 13+).
+**UpackX** là ứng dụng giải nén native siêu nhẹ, ổn định dành riêng cho **MacBook Intel (x86_64)**, tích hợp trực tiếp vào menu chuột phải Finder của macOS (Sonoma 14+), hỗ trợ đầy đủ archive nhiều phần (Multipart), bảo vệ thư mục mount Google Drive for Desktop và sở hữu icon phong cách macOS hiện đại.
 
 ---
 
 ## 1. Điểm nổi bật & Thống kê kỹ thuật
 
-| Tiêu chí | UpackX | Ứng dụng thông thường (Electron / Java / GUI nặng) |
+| Tiêu chí | UpackX v1.2.0 | Ứng dụng thông thường (Electron / Java / GUI nặng) |
 |---|---|---|
-| **Dung lượng file thực thi** | **371 KB** (Mã máy native x86_64 tối ưu hoá `-O`) | > 80 – 150 MB |
-| **Dung lượng toàn bộ .app** | **2.7 MB** (Đã đóng gói standalone `7zz` độc lập) | > 150 – 300 MB |
-| **Mức tiêu thụ RAM (RSS)** | **~12.6 – 12.9 MB** khi giải nén file 120 MB – 500 MB | > 200 – 500 MB |
-| **Phụ thuộc bên ngoài** | **0% (Không cần Homebrew)**, chạy ngay trên máy người dùng | Yêu cầu runtime, node_modules |
-| **Tiến trình nền (Daemon)** | **Không có** (Không chạy thường trú, đóng app là tắt sạch) | Nhiều daemon ngốn pin |
+| **Dung lượng file thực thi** | **438 KB** (Mã máy native x86_64 tối ưu `-O`) | > 80 – 150 MB |
+| **Dung lượng toàn bộ .app** | **3.4 MB** (Đã đóng gói standalone `7zz` + Full `.icns` đa kích thước) | > 150 – 300 MB |
+| **Mức tiêu thụ RAM (RSS)** | **~12.5 – 27.3 MB** khi stream giải nén 120 MB – 500 MB | > 200 – 500 MB |
+| **Phụ thuộc bên ngoài** | **0% (Không cần Homebrew)**, chạy độc lập trên máy đích | Cần runtime, Node.js, thư viện phụ trợ |
+| **Tiến trình nền (Daemon)** | **Không có** (Zero daemon, hoàn tất tác vụ là thoát sạch) | Chạy ngầm tốn RAM và hao pin |
 | **Công nghệ** | Swift 6 + AppKit + system `libarchive.2.dylib` + `7zz` | WebKit / Chromium |
+| **Cơ chế Finder Menu** | **Native Cocoa NSServices** (Duy nhất 1 cơ chế, 0 trùng lặp) | Tiện ích mở rộng hoặc daemon nền |
+| **Hệ điều hành tối thiểu** | macOS 14.0 Sonoma (x86_64) | Đa dạng nhưng cồng kềnh |
 
 ---
 
-## 2. Tích hợp Finder (Menu chuột phải)
+## 2. Giải quyết triệt để vấn đề 4 mục Finder bị trùng
 
-Sau khi cài đặt, khi chuột phải vào bất kỳ file nén nào (`.zip`, `.7z`, `.rar`, `.tar.gz`, v.v.) trong Finder, người dùng có 2 thao tác nhanh:
+### 2.1. Điều tra nguồn gốc 4 mục menu chuột phải cũ
+Trước phiên bản 1.2, khi chuột phải vào file nén trong Finder xuất hiện 4 tùy chọn liên quan đến UpackX do tồn tại song song hai cơ chế đăng ký có cùng tên hiển thị:
+1. **Mục 1:** `UpackX - Giải nén nhanh.workflow` trong `~/Library/Services` (đăng ký qua Automator Quick Actions).
+2. **Mục 2:** `UpackX - Giải nén….workflow` trong `~/Library/Services` (đăng ký qua Automator Quick Actions).
+3. **Mục 3:** `quickExtractService` ("Giải nén nhanh với UpackX") trong `Info.plist` của `/Applications/UpackX.app` (Native Cocoa `NSServices`).
+4. **Mục 4:** `extractToService` ("Giải nén… với UpackX") trong `Info.plist` của `/Applications/UpackX.app` (Native Cocoa `NSServices`).
+Đồng thời, LaunchServices còn giữ bản index của cả bản debug `build/UpackX.app` và bản cài đặt `/Applications/UpackX.app`.
 
-### A. Giải nén nhanh (Quick Extract)
-* **Đích giải nén:** Giải nén ngay tại thư mục hiện tại chứa file nén.
-* **Không tạo thư mục bao ngoài:** Giải nén thẳng vào thư mục hiện tại, giữ nguyên 100% cấu trúc thư mục con vốn có bên trong archive.
-* **Không mở cửa sổ cấu hình:** Bắt đầu giải nén ngay tức thì.
-* **An toàn xung đột:** Tuyệt đối không âm thầm ghi đè file hiện có. Nếu phát hiện file trùng tên, ứng dụng tự động bảo toàn file cũ và tạo bản sao an toàn (hoặc hỏi người dùng trong chế độ GUI).
-
-### B. Giải nén… (Extract To...)
-* Mở một hộp thoại nhỏ, thanh lịch:
-  * **Thư mục đích:** Xem và chọn thư mục bất kỳ với nút duyệt thư mục trực quan.
-  * **Tạo thư mục bao ngoài (`/<tên_file>`):** Mặc định **OFF** (tắt) theo yêu cầu.
-  * **Chính sách xử lý file trùng:** Chọn giữa *Hỏi khi trùng*, *Bỏ qua file trùng*, *Tự động đổi tên (Giữ cả hai)*, hoặc *Ghi đè file cũ*.
-  * **Hiển thị thông tin archive:** Xem nhanh định dạng nén, tổng dung lượng sau giải nén, số lượng file, trạng thái có mật khẩu.
-
----
-
-## 3. Kiến trúc Engine giải nén (Streaming)
-
-* **Engine chính — Native `LibarchiveExtractor`:**
-  * Sử dụng trực tiếp dynamic library `/usr/lib/libarchive.2.dylib` có sẵn trong macOS.
-  * Cơ chế streaming khối (chunked stream `32KB – 64KB` qua `archive_read_data_block`), **không bao giờ nạp toàn bộ archive vào RAM**.
-  * Hỗ trợ file nén hàng chục GB mà RAM vẫn giữ nguyên mức ~12 – 15 MB.
-* **Engine phụ trợ — Bundled `SevenZipExtractor`:**
-  * Đóng gói sẵn binary độc lập `7zz` (chỉ link với system `libc++`), giải quyết các file nén RAR5/7Z có thuật toán phức tạp hoặc khối nén Solid.
-  * Tự động điều hướng mà không cần cài đặt thêm bất kỳ gói Homebrew nào trên máy đích.
-* **Bảo mật tuyệt đối:**
-  * **Chống Zip-Slip & Path Traversal:** Module `PathSecurity` phân tích chuẩn hoá đường dẫn, loại bỏ mọi nỗ lực thoát khỏi thư mục giải nén (`../../`, đường dẫn tuyệt đối, ký tự null `\0`).
-  * **Ghi file an toàn & Hủy sạch sẽ:** Dữ liệu giải nén được ghi vào file tạm ẩn `.<filename>.<uuid>.upackx_part` trước khi atomically rename sang file chính thức. Nếu người dùng nhấn **Hủy** (Cancel) hoặc gặp lỗi, toàn bộ file tạm được dọn sạch, tuyệt đối không làm hỏng hay xóa dữ liệu cũ đã tồn tại, và **không bao giờ báo thành công giả tạo** khi chỉ giải nén dở dang.
+### 2.2. Chọn duy nhất một cơ chế: Native Cocoa NSServices
+UpackX v1.2 đã chuyển đổi toàn bộ sang **Native Cocoa NSServices**:
+- Xóa sạch toàn bộ các bundle workflow cũ trong `~/Library/Services/`.
+- Hủy đăng ký bản build trung gian khỏi LaunchServices (`lsregister -u`).
+- Khởi tạo đúng 2 endpoint trong `Info.plist` và kích hoạt tự động qua `pbs` (Pasteboard Server):
+  - **Giải nén nhanh với UpackX** (`quickExtractService`): Giải nén ngay cạnh archive, không tạo thư mục bao ngoài, không mở cấu hình.
+  - **Giải nén… với UpackX** (`extractToService`): Mở hộp thoại native chọn thư mục đích và tùy chỉnh xung đột.
+- Đảm bảo Finder chỉ hiển thị đúng **2 mục duy nhất**, không chạy daemon nền, không cần Automator runner.
 
 ---
 
-## 4. Hướng dẫn Build & Cài đặt
+## 3. Minimal App Icon (Thiết kế Native macOS)
 
-### Yêu cầu môi trường build:
-* Máy Mac Intel (x86_64) hoặc Apple Silicon (hỗ trợ biên dịch `-target x86_64-apple-macos14.0`).
-* Xcode Command Line Tools (`swiftc`, `clang`).
+UpackX v1.2 được tích hợp bộ nhận diện icon ứng dụng hoàn toàn mới:
+- **Ý tưởng:** Một hộp lưu trữ tối giản đang mở với đường khóa kéo / đường tách tinh tế ở giữa và mũi tên thăng hoa, gợi trực tiếp hành động giải nén dữ liệu.
+- **Màu sắc & Chất liệu:** Nền graphite / xanh xám đậm (`#13161C` đến `#282F3B`) với viền specular tinh xảo chuẩn squircle macOS; thân hộp bằng màu xám bạc neutral bạch kim và điểm nhấn cyan điện quang (`#38BDF8`).
+- **Tập tin nguồn vector:** `Resources/AppIcon.svg`.
+- **Đầy đủ kích thước hệ thống:** Được render vector và biên dịch qua `iconutil` thành `Resources/AppIcon.icns` với 10 độ phân giải (16x16, 32x32, 64x64, 128x128, 256x256, 512x512, 1024x1024 cả chuẩn 1x và Retina 2x), nhận diện sắc nét trên Dock, Finder, Spotlight và Launchpad.
 
-### Lệnh build và cài đặt nhanh:
+---
+
+## 4. Các tính năng cốt lõi & Cải tiến ổn định
+
+### 4.1. Giải nén nhanh (Quick Extract)
+* Giải nén ngay tại thư mục chứa file nén.
+* Không tạo thư mục bao ngoài (No extra enclosing folder).
+* HUD tiến trình thanh lịch với thanh đo phần trăm, tốc độ stream (MB/s) và nút Hủy an toàn.
+
+### 4.2. Giải nén… (Extract To...)
+* Hộp thoại native AppKit nổi phía trước (`NSWindow.level = .floating`).
+* Lựa chọn thư mục đích linh hoạt qua sheet native.
+* Tùy chọn tạo thư mục bao ngoài (mặc định tắt theo chuẩn macOS).
+* Chính sách xử lý xung đột: *Hỏi khi trùng* (mặc định), *Bỏ qua*, *Tự động đổi tên*, *Ghi đè*.
+
+### 4.3. Bảo vệ thư mục & Nhập an toàn (Safe Directory Merge)
+* Khi giải nén vào thư mục đã tồn tại (đặc biệt trên Google Drive for Desktop): UpackX **bảo tồn nguyên vẹn thư mục đích**, an toàn nhập (merge) các file con vào trong mà tuyệt đối không xóa hay thay thế toàn bộ thư mục cha.
+* Trường hợp file trùng, UpackX xử lý theo từng file độc lập.
+
+### 4.4. Xử lý file nén có mật khẩu (Password Prompting)
+* Tự động phát hiện archive mã hóa (ZIP AES, RAR, 7Z).
+* Hiển thị hộp thoại AppKit `PasswordDialog` yêu cầu nhập mật khẩu thay vì báo lỗi đột ngột.
+* Tự động giải nén lại với mật khẩu đã cung cấp.
+
+### 4.5. Nút "Xem trong Finder" (Show in Finder)
+* Sau khi giải nén thành công, thông báo hệ thống của macOS hiển thị action button **"Xem trong Finder"**.
+* Người dùng click vào thông báo hoặc nút action, Finder lập tức mở và làm nổi bật (highlight) thư mục đích vừa giải nén.
+
+### 4.6. Archive nhiều phần (Multipart Volumes)
+* Hỗ trợ đầy đủ `.7z.001`, `.part1.rar`, `.z01`, `.r00`...
+* Tự động nhóm volume: chọn bất kỳ part nào (vd `.003`) cũng tự tìm và kích hoạt từ part đầu (`.001`).
+* Khử trùng lặp: chọn nhiều volume cùng lúc chỉ sinh đúng 1 tác vụ.
+* Quét toàn vẹn: từ chối giải nén và báo lỗi rõ ràng nếu thiếu bất kỳ volume nào.
+
+### 4.7. Tương thích Google Drive for Desktop
+* Nhận diện mount Google Drive (`/Library/CloudStorage/GoogleDrive-...` hoặc `/Volumes/GoogleDrive`).
+* Phát hiện cờ `SF_DATALESS` của macOS File Provider: cảnh báo file placeholder chưa tải về máy.
+* Fallback non-atomic rename cho các phân vùng ảo.
+* Phân biệt rõ thông báo ghi cục bộ và đồng bộ đám mây.
+
+---
+
+## 5. Hướng dẫn Quản trị & Cài đặt
+
+### Các lệnh Makefile:
 
 ```bash
-# 1. Clone hoặc di chuyển vào thư mục project
-cd /Users/vup/Documents/agy/upackx
+# 1. Biên dịch bản Release x86_64 kèm icon:
+make build
 
-# 2. Biên dịch UpackX.app
-make
-
-# 3. Cài đặt vào /Applications và kích hoạt Finder Quick Actions
+# 2. Cài đặt vào /Applications và kích hoạt Services:
 make install
 
-# 4. Chạy toàn bộ test suite kiểm tra chất lượng
+# 3. Clean Reinstall (Gỡ sạch bản cũ, dọn workflow, build & cài bản mới):
+make reinstall
+
+# 4. Gỡ cài đặt hoàn toàn khỏi hệ thống (Idempotent):
+make uninstall
+
+# 5. Chạy toàn bộ 22 bài kiểm thử chất lượng:
 make test
 ```
 
-### Sử dụng qua Terminal (CLI):
+### Sử dụng qua dòng lệnh (CLI):
 ```bash
 # Giải nén nhanh tại chỗ:
 upackx --quick /path/to/archive.zip
 
-# Mở hộp thoại chọn thư mục và tùy chọn:
+# Mở hộp thoại tùy chọn:
 upackx --extract-to /path/to/archive.7z
 
-# Giải nén với chính sách trùng tên xác định:
-upackx --quick --skip /path/to/archive.tar.gz
-upackx --quick --overwrite /path/to/archive.rar
+# Giải nén với chính sách trùng file:
+upackx --quick --rename /path/to/archive.zip
+upackx --quick --skip /path/to/archive.zip
+upackx --quick --overwrite /path/to/archive.zip
 
-# Cài đặt hoặc làm mới Finder Quick Actions:
+# Kích hoạt lại Finder Services:
 upackx --install-services
 ```
 
 ---
 
-## 5. Kết quả kiểm thử thực tế (Test Suite)
+## 6. Kết quả kiểm thử thực tế (Test Suite)
 
-Chạy tự động qua `make test` (17/17 test cases Passed):
+Bộ kiểm thử tự động `make test` đạt kết quả **22/22 Tests Passed (100%)**:
 
-1. **Test 1 — Định dạng cơ bản & Tiếng Việt:** ZIP, TAR.GZ, 7Z, RAR giải nén chính xác 100%, bảo toàn nguyên vẹn tên file tiếng Việt có dấu Unicode (`Tiếng Việt có dấu - Đồ án tốt nghiệp.txt`).
-2. **Test 2 — Thư mục nhiều cấp:** Cấu trúc thư mục 10 cấp lồng nhau được tái hiện chuẩn xác.
-3. **Test 3 — Xử lý xung đột file an toàn:** File ban đầu chứa dữ liệu gốc `ORIGINAL USER DATA` không bao giờ bị ghi đè âm thầm. Bản sao được tự động đánh số `(1)` an toàn.
-4. **Test 4 — Chống Zip-Slip:** File archive chứa đường dẫn `../../evil_slip.txt` bị chặn đứng ngay lập tức, không thoát ra ngoài thư mục đích.
-5. **Test 5 — Phát hiện file hỏng:** Archive chứa byte rác ngẫu nhiên bị từ chối với mã lỗi khác 0 và thông báo rõ ràng.
-6. **Test 6 — Nhận diện archive nhiều phần (Stage 2):** Nhóm chuẩn xác `movie.part1.rar` (3 phần) và `dataset.7z.001` (2 phần), chỉ đưa phần đầu vào hàng đợi giải nén.
-7. **Test 7 — Benchmark file 120 MB:** RAM đỉnh chỉ đạt **12.6 MB**.
-8. **Test 8 — Tích hợp Finder Quick Actions:** Cài đặt đầy đủ `document.wflow` và `Info.plist` vào `~/Library/Services/`.
-9. **Test 9 — File nén có mật khẩu:** Bắt buộc nhập mật khẩu, từ chối giải nén nếu không có passphrase.
-10. **Test 10 — Giải nén hàng loạt:** Nhiều archive được chọn cùng lúc đều được giải nén tuần tự an toàn.
-11. **Test 11 — Hủy giữa chừng:** Không để lại bất kỳ file rác `*.upackx_part` nào trên ổ cứng.
-12. **Test 12 — Benchmark file lớn 500 MB:** RAM đỉnh chỉ **12.9 MB** trong toàn bộ quá trình stream.
-
----
-
-## 6. Sẵn sàng cho Giai đoạn 2 (Multipart Archives + Google Drive)
-
-Kiến trúc mã nguồn đã được tách lớp sẵn sàng:
-1. **`MultipartDetector.swift`:** Đã hiện thực giải thuật phân tích regex cho `.partN.rar`, `.7z.00N`, `.z0N`, gom nhóm volume và chỉ gọi giải nén từ primary volume.
-2. **Google Drive Mount:** Hỗ trợ nhận diện đường dẫn mount của Google Drive for Desktop (`/Volumes/GoogleDrive` hoặc `~/Library/CloudStorage/GoogleDrive-...`). Khi người dùng chọn giải nén trong thư mục Google Drive, UpackX tự động sử dụng chính thư mục đó làm đích mặc định, thực hiện hàng đợi batch và xác nhận trước khi thao tác.
+1. **Test 1 — Định dạng cơ bản & Unicode Tiếng Việt:** ZIP, TAR.GZ bảo toàn nguyên vẹn tên tiếng Việt có dấu.
+2. **Test 2 — Thư mục lồng 10 cấp:** Tái hiện chính xác cấu trúc sâu.
+3. **Test 3 — An toàn xung đột file:** Tuyệt đối không ghi đè âm thầm, hỗ trợ tự sinh bản sao `(1)`.
+4. **Test 4 — Chống Zip-Slip:** Chặn đứng nỗ lực giải nén thoát khỏi thư mục đích (`../../`).
+5. **Test 5 — Phát hiện file hỏng:** Dữ liệu rác bị từ chối với exit code khác 0.
+6. **Test 6 — Nhận diện nhóm volume Multipart:** Phân tích đúng 3 bộ volume độc lập, gom part về primary volume.
+7. **Test 7 — Benchmark file 120 MB:** RAM đỉnh chỉ đạt **27.0 MB**.
+8. **Test 8 — Finder Native Services:** Xác minh 0 workflow thừa trong `~/Library/Services` và `Info.plist` khai báo đúng 2 Cocoa NSServices.
+9. **Test 9 — File nén có mật khẩu:** Bắt buộc mật khẩu, từ chối giải nén khi thiếu mật khẩu.
+10. **Test 10 — Hàng đợi nhiều archive:** Xử lý tuần tự an toàn không lỗi.
+11. **Test 11 — Hủy giữa chừng:** Dọn sạch 100% file tạm `.upackx_part`, không để lại rác trên ổ cứng.
+12. **Test 12 — Benchmark file lớn 500 MB:** RAM đỉnh chỉ **27.1 MB** với cơ chế stream bộ nhớ cố định.
+13. **Test 13 — Thực thi Native NSService thực tế:** `NSPerformService("Giải nén nhanh với UpackX")` giải nén đúng thư mục chứa archive không sinh thư mục bao ngoài.
+14. **Test 14 — Giải nén Multipart thực tế (.7z.001 - .004):** Chọn part 3, giải nén hoàn chỉnh byte-for-byte khớp 100% file gốc.
+15. **Test 15 — Từ chối Multipart thiếu volume:** Phát hiện thiếu volume `.002`, từ chối giải nén và báo lỗi chi tiết.
+16. **Test 16 — Google Drive Mount:** Giải nén trực tiếp vào `My Drive/Project/` không sinh thư mục lồng.
+17. **Test 17 — Safe Directory Merge:** Nhập nội dung vào thư mục đã có mà không xóa hay thay thế toàn bộ thư mục.
+18. **Test 18 — Minimal AppIcon Bundle:** Xác minh `AppIcon.icns` đa kích thước và vector gốc `AppIcon.svg`.
+19. **Test 19 — Script Reinstall & Uninstall:** Kiểm tra tính sẵn sàng và tính thực thi của các script bảo trì.

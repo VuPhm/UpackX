@@ -25,9 +25,9 @@ else
     ln -sf "${DEST_APP}/Contents/MacOS/UpackX" "${HOME}/.local/bin/upackx"
 fi
 
-echo "=== Installing Finder Quick Actions ==="
+echo "=== Activating Native Finder NSServices ==="
 "${DEST_APP}/Contents/MacOS/UpackX" --install-services
 
 echo "=== Installation Finished Successfully! ==="
 echo "UpackX.app is now in /Applications"
-echo "Finder Quick Actions 'Giải nén nhanh với UpackX' and 'Giải nén… với UpackX' are active in ~/Library/Services."
+echo "Native Finder Services 'Giải nén nhanh với UpackX' and 'Giải nén… với UpackX' are active."

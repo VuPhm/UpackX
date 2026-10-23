@@ -1,6 +1,6 @@
 import AppKit
 
-let version = "1.0.0"
+let version = "1.1.0"
 
 if CommandLine.arguments.contains("--version") || CommandLine.arguments.contains("-v") {
     print("UpackX version \(version) (x86_64 native)")

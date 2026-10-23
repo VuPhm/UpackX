@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>vi</string>
     <key>CFBundleExecutable</key>
     <string>UpackX</string>
     <key>CFBundleIdentifier</key>
@@ -16,12 +16,14 @@
     <string>UpackX</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
@@ -38,6 +40,8 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.archive</string>
+                <string>public.data</string>
+                <string>public.item</string>
                 <string>public.zip-archive</string>
                 <string>com.pkware.zip-archive</string>
                 <string>org.7-zip.7-zip-archive</string>
@@ -56,43 +60,73 @@
             <key>NSMenuItem</key>
             <dict>
                 <key>default</key>
-                <string>UpackX: Giải nén nhanh</string>
+                <string>Giải nén nhanh với UpackX</string>
             </dict>
             <key>NSMessage</key>
             <string>quickExtractService</string>
             <key>NSPortName</key>
             <string>UpackX</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSFilenamesPboardType</string>
+                <string>public.file-url</string>
+            </array>
             <key>NSSendFileTypes</key>
             <array>
-                <string>public.archive</string>
-                <string>public.data</string>
                 <string>public.item</string>
+                <string>public.data</string>
+                <string>public.archive</string>
+                <string>public.zip-archive</string>
                 <string>com.pkware.zip-archive</string>
                 <string>org.7-zip.7-zip-archive</string>
                 <string>com.rarlab.rar-archive</string>
                 <string>org.gnu.gnu-tar-archive</string>
+                <string>public.tar-archive</string>
+                <string>org.tukaani.xz-archive</string>
+                <string>public.bzip2-archive</string>
+                <string>org.gnu.gnu-zip-archive</string>
             </array>
+            <key>NSRequiredContext</key>
+            <dict>
+                <key>NSTextContent</key>
+                <string>FilePath</string>
+            </dict>
         </dict>
         <dict>
             <key>NSMenuItem</key>
             <dict>
                 <key>default</key>
-                <string>UpackX: Giải nén…</string>
+                <string>Giải nén… với UpackX</string>
             </dict>
             <key>NSMessage</key>
             <string>extractToService</string>
             <key>NSPortName</key>
             <string>UpackX</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSFilenamesPboardType</string>
+                <string>public.file-url</string>
+            </array>
             <key>NSSendFileTypes</key>
             <array>
-                <string>public.archive</string>
-                <string>public.data</string>
                 <string>public.item</string>
+                <string>public.data</string>
+                <string>public.archive</string>
+                <string>public.zip-archive</string>
                 <string>com.pkware.zip-archive</string>
                 <string>org.7-zip.7-zip-archive</string>
                 <string>com.rarlab.rar-archive</string>
                 <string>org.gnu.gnu-tar-archive</string>
+                <string>public.tar-archive</string>
+                <string>org.tukaani.xz-archive</string>
+                <string>public.bzip2-archive</string>
+                <string>org.gnu.gnu-zip-archive</string>
             </array>
+            <key>NSRequiredContext</key>
+            <dict>
+                <key>NSTextContent</key>
+                <string>FilePath</string>
+            </dict>
         </dict>
     </array>
 </dict>
