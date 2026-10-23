@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-10-24
+
+### Fixed & Hardened
+- **7-Zip Password Security:** Migrated password input from command-line arguments to standard input pipe (`stdin`), eliminating exposure to process listing tools (`ps aux`).
+- **Interactive Conflict Handling in 7zz:** Added staging directory and interactive conflict prompting for 7Z/RAR extractions. The `.ask` policy now legitimately prompts the user instead of automatically falling back to rename.
+- **Path Resolution on Symlinked Mounts:** Resolved canonical symlink mismatches on macOS `/tmp` (`/private/tmp`) ensuring correct relative path extraction.
+- **CI/CD Pipeline Upgrade:** Migrated GitHub Actions runners from deprecated `macos-13` to supported `macos-15-intel` runners.
+- **Regression Tests:** Added automated tests for 7Z conflict handling, stdin password protection, and corrupted archive detection (28 passing tests).
+
 ## [1.2.0] - 2026-10-24
 
 ### Added
