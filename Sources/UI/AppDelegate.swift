@@ -131,6 +131,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 conflictStrategy = .skip
             } else if arg == "--rename" {
                 conflictStrategy = .rename
+            } else if arg == "--test-fault-disk-full" {
+                ZipCompressorFaults.simulateDiskFull = true
+            } else if arg == "--test-fault-data-write" {
+                ZipCompressorFaults.failDataWrite = true
+            } else if arg == "--test-fault-close" {
+                ZipCompressorFaults.failClose = true
+            } else if arg == "--test-fault-header" {
+                ZipCompressorFaults.failHeaderWrite = true
+            } else if arg == "--test-fault-commit" {
+                ZipCompressorFaults.simulateCommitFailure = true
             } else if arg == "--headless" {
                 isHeadless = true
             } else if !arg.hasPrefix("-") {

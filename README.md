@@ -1,6 +1,6 @@
 # UpackX — Lightweight Native Archive Extractor & Compressor for macOS
 
-[![Release](https://img.shields.io/badge/release-v1.3.0-blue.svg)](https://github.com/VuPhm/UpackX/releases)
+[![Release](https://img.shields.io/badge/release-v1.3.1-blue.svg)](https://github.com/VuPhm/UpackX/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B%20%7C%20Intel%20x86__64-brightgreen.svg)]()
 [![Architecture](https://img.shields.io/badge/arch-x86__64-orange.svg)]()
 [![License](https://img.shields.io/badge/license-Proprietary%20%2F%20BSD%20Notices-lightgrey.svg)](THIRD_PARTY_NOTICES.md)
@@ -109,9 +109,9 @@
 
 Pre-built release packages are available on the [GitHub Releases page](https://github.com/VuPhm/UpackX/releases):
 
-- **Apple Disk Image (Recommended):** `UpackX-v1.3.0-macOS-Intel.dmg`
-- **Apple Installer Package:** `UpackX-v1.3.0-macOS-Intel.pkg`
-- **Portable ZIP Bundle:** `UpackX-v1.3.0-macOS-Intel.zip`
+- **Apple Disk Image (Recommended):** `UpackX-v1.3.1-macOS-Intel.dmg`
+- **Apple Installer Package:** `UpackX-v1.3.1-macOS-Intel.pkg`
+- **Portable ZIP Bundle:** `UpackX-v1.3.1-macOS-Intel.zip`
 - **Checksums:** `SHA256SUMS.txt`
 
 ---
@@ -133,24 +133,24 @@ Right-click on any file or folder in **Finder** to access 4 dedicated native Upa
 
 **UpackX** là ứng dụng native siêu nhẹ, hiệu năng cao phục vụ cả hai nhu cầu **Nén và Giải nén** trên macOS Intel (x86_64). Tích hợp native 4 thao tác trực tiếp vào menu ngữ cảnh Finder với 0 daemon chạy ngầm.
 
-### 2. Điểm nổi bật phiên bản v1.3.0
-
+### 2. Điểm nổi bật phiên bản v1.3.1
+- **Toàn vẹn dữ liệu nén tuyệt đối:**
+  - Không bao giờ âm thầm bỏ sót file hay báo thành công trên archive chưa hoàn chỉnh.
+  - Xử lý phân biệt EOF và lỗi đọc I/O, kiểm tra chặt chẽ `EINTR`.
+  - Đối chiếu số byte ghi thực tế với kích thước khai báo, phát hiện file bị thay đổi/rút ngắn khi đang nén.
+  - Kiểm tra toàn bộ mã trả về của `archive_write_set_options`, `archive_write_close` và các thao tác libarchive.
+  - Từ chối an toàn các file socket, named pipe (FIFO) và device nodes mà không bị treo tiến trình.
+- **Cam kết Atomic Commit & Rollback:**
+  - Không bao giờ xóa archive cũ trước khi bản thay thế hoàn tất và được xác thực.
+  - Sử dụng cơ chế thay thế nguyên tử kết hợp sao lưu tạm (`.upackx_backup_<uuid>.tmp`) và tự động rollback nếu gặp lỗi.
+  - Bảo vệ an toàn kể cả trên đường dẫn Google Drive File Provider.
 - **4 thao tác Finder rõ ràng (2 Nén, 2 Giải nén):**
   - `Giải nén nhanh với UpackX` / `Giải nén… với UpackX`
   - `Nén nhanh với UpackX` / `Nén… với UpackX`
-- **Nén ZIP Streaming chuẩn macOS:**
-  - Nén file đơn, thư mục đơn (giữ nguyên cấu trúc gốc `Photos/`), hoặc nhiều file/thư mục thành `Archive.zip`.
-  - Mức nén: Nhanh (Fast) / Tiêu chuẩn (Normal) / Tối đa (Maximum).
-  - Không sửa hoặc xóa dữ liệu nguồn.
-  - Bộ đệm 64 KB, RAM tiêu thụ < 13 MB.
-- **An toàn tuyệt đối:**
-  - Không để file nén tự lọt vào nội dung đang nén (Self-inclusion defense).
-  - Không ghi đè âm thầm dữ liệu cũ.
-  - Sử dụng file tạm staging, dọn dẹp sạch sẽ khi hủy.
-  - Bảo mật mật khẩu qua pipe standard input (`stdin`), không lộ trong danh sách process (`ps aux`).
+- **Bộ kiểm thử 50 tests tự động:** Kiểm tra lỗi có chủ đích, fault injection, streaming, benchmark bộ nhớ (< 13 MB RSS).
 
 ### 3. Cài đặt
 
-1. Tải **`UpackX-v1.3.0-macOS-Intel.dmg`** từ mục Releases.
+1. Tải **`UpackX-v1.3.1-macOS-Intel.dmg`** từ mục Releases.
 2. Mở DMG và kéo `UpackX.app` vào thư mục `Applications`.
 3. Nhấp chuột phải vào `UpackX.app` và chọn **Open** trong lần đầu tiên để kích hoạt Finder Services.

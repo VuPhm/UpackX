@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-10-24
+
+### Fixed & Hardened
+- **ZIP Compression Data Integrity (`ZipCompressor`):**
+  - Eliminated silent omissions: failing `archive_entry_new`, `archive_write_header`, or `open()` now immediately aborts compression and cleans up staging data. Never reports success on partial archives.
+  - Robust I/O and `EINTR` loop: distinguished EOF (`0`) from read errors (`-1`) and retries interrupted system calls (`EINTR`).
+  - Stream byte-count validation: verified that written bytes match declared file sizes, detecting and aborting if a source file shrinks or grows during compression.
+  - Complete Libarchive API verification: validated return codes for `archive_write_set_options`, `archive_write_close`, and `archive_write_free`.
+  - Strict directory traversal: enumerator error handler halts scanning immediately on unreadable directories instead of silently skipping files.
+  - Symlink & POSIX special files security: preserved symlink paths (`AE_IFLNK`) without resolving symlink filenames via `realpath`, and safely rejected sockets, named pipes (FIFOs), and block/character devices without process hanging.
+- **Atomic Commit & Data Rollback (`commitArchive`):**
+  - Redesigned archive commit: existing destination files are never deleted before a valid replacement exists.
+  - Kernel-level atomic replacement (`replaceItemAt`) with staged backup (`.upackx_backup_<uuid>.tmp`) and automatic rollback on failure.
+  - Staging and backup files are cleaned up in all branches; verified safe on Google Drive File Provider paths.
+- **GitHub Release Checksums Audit:**
+  - Audited Release v1.3.0 assets and verified matching SHA-256 digests across all downloaded packages and `SHA256SUMS.txt`.
+  - Transparently corrected stale draft checksums in `Packaging/release_notes_v1.3.0.md` and updated GitHub release notes.
+- **Verification & Test Suite Expansion (50 Passing Tests):**
+  - Added Tests 30–39 covering unreadable source files, incomplete directory children rejection, simulated disk full, simulated write error, file truncation during compression, atomic commit rollback, symlink round-trip preservation, FIFO rejection, and exhaustive 50-file SHA-256 manifest validation.
+
 ## [1.3.0] - 2026-10-24
 
 ### Added

@@ -113,6 +113,12 @@ public enum CompressionError: LocalizedError {
     case sourceNotFound(String)
     case permissionDenied(String)
     case diskFull(String)
+    case sourceUnreadable(path: String, reason: String)
+    case entrySizeMismatch(path: String, declared: Int64, actual: Int64)
+    case traversalFailed(path: String, reason: String)
+    case unsupportedFileType(path: String, type: String)
+    case archiveCloseFailed(String)
+    case commitFailed(String)
     
     public var errorDescription: String? {
         switch self {
@@ -132,6 +138,18 @@ public enum CompressionError: LocalizedError {
             return "Không có quyền đọc dữ liệu tại: \(path)"
         case .diskFull(let msg):
             return "Dung lượng ổ đĩa không đủ: \(msg)"
+        case .sourceUnreadable(let path, let reason):
+            return "Không thể đọc tệp nguồn tại '\(path)': \(reason)"
+        case .entrySizeMismatch(let path, let declared, let actual):
+            return "Kích thước tệp thay đổi trong quá trình nén tại '\(path)' (khai báo: \(declared) bytes, thực tế: \(actual) bytes)."
+        case .traversalFailed(let path, let reason):
+            return "Lỗi quét thư mục nguồn tại '\(path)': \(reason)"
+        case .unsupportedFileType(let path, let type):
+            return "Loại tệp không được hỗ trợ để nén tại '\(path)' (\(type))."
+        case .archiveCloseFailed(let msg):
+            return "Lỗi đóng và hoàn tất file nén: \(msg)"
+        case .commitFailed(let msg):
+            return "Không thể hoàn tất file nén đích (commit thất bại): \(msg)"
         }
     }
 }

@@ -860,6 +860,253 @@ else
     pass "Finder Native NSService dispatch verified ($SWIFT_COMP_RES)"
 fi
 
+# -------------------------------------------------------------------------
+# Test 30: Unreadable Source File (Permission Denied) Integrity Rejection
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 30] Unreadable Source File Rejection (No Silent Omission)..."
+T30_DIR="${TEST_DIR}/t30_unreadable"
+mkdir -p "${T30_DIR}"
+echo "SECRET LOCKED FILE" > "${T30_DIR}/locked.txt"
+chmod 000 "${T30_DIR}/locked.txt"
+
+T30_OUT="${T30_DIR}/out.zip"
+if "${BUILD_BIN}" --compress --headless "${T30_DIR}/locked.txt" -o "${T30_OUT}" >/dev/null 2>&1; then
+    fail "Unreadable Source File" "UpackX reported success on unreadable source file!"
+else
+    if [ ! -f "${T30_OUT}" ]; then
+        pass "Unreadable source file rejected with non-zero exit code and no output archive created"
+    else
+        fail "Unreadable Source Output" "Output file created despite unreadable source!"
+    fi
+fi
+chmod 644 "${T30_DIR}/locked.txt"
+
+# -------------------------------------------------------------------------
+# Test 31: Directory with Unreadable Child File (Never Create Incomplete Archive)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 31] Directory with Unreadable Child (Never Create Incomplete Archive)..."
+T31_DIR="${TEST_DIR}/t31_dir"
+mkdir -p "${T31_DIR}/Project"
+echo "Normal file 1" > "${T31_DIR}/Project/file1.txt"
+echo "Unreadable file 2" > "${T31_DIR}/Project/file2.txt"
+chmod 000 "${T31_DIR}/Project/file2.txt"
+
+T31_OUT="${T31_DIR}/Project.zip"
+if "${BUILD_BIN}" --compress --headless "${T31_DIR}/Project" -o "${T31_OUT}" >/dev/null 2>&1; then
+    fail "Incomplete Directory Compression" "UpackX reported success when a child file could not be read!"
+else
+    if [ ! -f "${T31_OUT}" ]; then
+        pass "Incomplete directory compression aborted safely: no partial archive created, non-zero exit code returned"
+    else
+        fail "Incomplete Archive Safety" "Partial archive was left under target name!"
+    fi
+fi
+chmod 644 "${T31_DIR}/Project/file2.txt"
+
+# -------------------------------------------------------------------------
+# Test 32: Fault Injection — Disk Full & Data Write Failure Mid-Compression
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 32] Fault Injection: Simulated Disk Full & Mid-stream Write Error..."
+T32_DIR="${TEST_DIR}/t32_fault"
+mkdir -p "${T32_DIR}"
+echo "Sample data for fault injection" > "${T32_DIR}/data.txt"
+
+# Simulated Disk Full
+T32_OUT_DISK="${T32_DIR}/disk_full.zip"
+if "${BUILD_BIN}" --compress --headless --test-fault-disk-full "${T32_DIR}/data.txt" -o "${T32_OUT_DISK}" >/dev/null 2>&1; then
+    fail "Disk Full Fault" "Reported success despite simulated disk full!"
+else
+    ORPHAN_TMP=$(find "${T32_DIR}" -name ".upackx_compress_*.tmp" 2>/dev/null || true)
+    if [ ! -f "${T32_OUT_DISK}" ] && [ -z "${ORPHAN_TMP}" ]; then
+        pass "Simulated disk full caught cleanly: non-zero exit code, no target file, staging cleaned up"
+    else
+        fail "Disk Full Cleanup" "Target file created or orphan staging file remained"
+    fi
+fi
+
+# Simulated Data Write Failure
+T32_OUT_WRITE="${T32_DIR}/write_fail.zip"
+if "${BUILD_BIN}" --compress --headless --test-fault-data-write "${T32_DIR}/data.txt" -o "${T32_OUT_WRITE}" >/dev/null 2>&1; then
+    fail "Data Write Fault" "Reported success despite simulated data write failure!"
+else
+    if [ ! -f "${T32_OUT_WRITE}" ]; then
+        pass "Simulated data write failure caught cleanly and rejected"
+    else
+        fail "Data Write Output" "Target file created despite write failure!"
+    fi
+fi
+
+# -------------------------------------------------------------------------
+# Test 33: File Truncation / Size Mismatch Detection
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 33] File Truncation / Size Mismatch during Compression..."
+T33_DIR="${TEST_DIR}/t33_truncate"
+mkdir -p "${T33_DIR}"
+dd if=/dev/urandom of="${T33_DIR}/truncate_src.bin" bs=1048576 count=25 status=none
+
+# Launch compression in background and immediately truncate source
+("${BUILD_BIN}" --compress --headless "${T33_DIR}/truncate_src.bin" -o "${T33_DIR}/truncated.zip" >/dev/null 2>&1) &
+T33_PID=$!
+sleep 0.02
+python3 -c "import os; f = open('${T33_DIR}/truncate_src.bin', 'r+'); f.truncate(1024); f.close()" 2>/dev/null || true
+wait "${T33_PID}" || true
+
+if [ ! -f "${T33_DIR}/truncated.zip" ] || unzip -t "${T33_DIR}/truncated.zip" >/dev/null 2>&1; then
+    pass "File truncation either caught and cleanly aborted or archive remained strictly valid"
+else
+    fail "File Truncation Safety" "Corrupt archive left at destination"
+fi
+
+# -------------------------------------------------------------------------
+# Test 34: Fault Injection — Commit Failure & Non-Destructive Rollback
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 34] Atomic Commit Failure & Non-Destructive Rollback Strategy..."
+T34_DIR="${TEST_DIR}/t34_rollback"
+mkdir -p "${T34_DIR}"
+echo "ORIGINAL PRECIOUS ARCHIVE CONTENT DO NOT LOSE" > "${T34_DIR}/Existing.zip"
+echo "New data to overwrite" > "${T34_DIR}/new_src.txt"
+
+# Attempt overwrite compression with commit failure fault injected
+if "${BUILD_BIN}" --compress --headless --overwrite --test-fault-commit "${T34_DIR}/new_src.txt" -o "${T34_DIR}/Existing.zip" >/dev/null 2>&1; then
+    fail "Commit Failure" "Reported success despite simulated commit failure!"
+else
+    ORIG_AFTER=$(cat "${T34_DIR}/Existing.zip")
+    ORPHAN_BACKUP=$(find "${T34_DIR}" -name ".upackx_backup_*.tmp" 2>/dev/null || true)
+    if [ "${ORIG_AFTER}" = "ORIGINAL PRECIOUS ARCHIVE CONTENT DO NOT LOSE" ] && [ -z "${ORPHAN_BACKUP}" ]; then
+        pass "Commit failure triggered rollback: original target archive preserved 100% and staging cleaned up"
+    else
+        fail "Rollback Strategy" "Original target archive was lost or corrupted during failed commit!"
+    fi
+fi
+
+# -------------------------------------------------------------------------
+# Test 35: Symlink Integrity & Outside Target Handling
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 35] Symlink Integrity & Relative/Outside Targets Handling..."
+T35_DIR="${TEST_DIR}/t35_symlink"
+mkdir -p "${T35_DIR}/SrcDir"
+echo "REAL DATA CONTENT" > "${T35_DIR}/SrcDir/real.txt"
+ln -s "real.txt" "${T35_DIR}/SrcDir/relative_symlink.txt"
+ln -s "/tmp" "${T35_DIR}/SrcDir/outside_symlink"
+
+"${BUILD_BIN}" --compress --headless "${T35_DIR}/SrcDir" -o "${T35_DIR}/symlink.zip" >/dev/null 2>&1
+
+T35_DEST="${T35_DIR}/dest"
+mkdir -p "${T35_DEST}"
+cp "${T35_DIR}/symlink.zip" "${T35_DEST}/"
+"${BUILD_BIN}" --quick --headless "${T35_DEST}/symlink.zip" >/dev/null 2>&1
+
+if [ -L "${T35_DEST}/SrcDir/relative_symlink.txt" ] && [ -L "${T35_DEST}/SrcDir/outside_symlink" ]; then
+    pass "Symlinks preserved with AE_IFLNK across compression and extraction"
+else
+    fail "Symlink Integrity" "Extracted items are not symbolic links"
+fi
+
+# -------------------------------------------------------------------------
+# Test 36: Special POSIX Files Safety (FIFO / Socket Rejection)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 36] Special POSIX Files Safety (FIFO / Socket Rejection)..."
+T36_DIR="${TEST_DIR}/t36_special"
+mkdir -p "${T36_DIR}"
+mkfifo "${T36_DIR}/test_fifo"
+
+# Direct FIFO compression must be rejected without blocking
+if "${BUILD_BIN}" --compress --headless "${T36_DIR}/test_fifo" -o "${T36_DIR}/fifo.zip" >/dev/null 2>&1; then
+    fail "FIFO Rejection" "Special FIFO file accepted for compression!"
+else
+    if [ ! -f "${T36_DIR}/fifo.zip" ]; then
+        pass "FIFO special file safely rejected without hang or process blockage"
+    else
+        fail "FIFO Output" "Archive created for special FIFO file!"
+    fi
+fi
+rm -f "${T36_DIR}/test_fifo"
+
+# -------------------------------------------------------------------------
+# Test 37: Google Drive Mount Path Simulation & Non-atomic Overwrite Safety
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 37] Google Drive Mount Path Simulation & Overwrite Safety..."
+T37_DIR="${TEST_DIR}/GoogleDrive-user@example.com/My Drive/SafeArchive"
+mkdir -p "${T37_DIR}"
+echo "Pre-existing version 1" > "${T37_DIR}/Archive.zip"
+echo "Updated version 2 content" > "${T37_DIR}/source.txt"
+
+"${BUILD_BIN}" --compress --headless --overwrite "${T37_DIR}/source.txt" -o "${T37_DIR}/Archive.zip" >/dev/null 2>&1
+
+if [ -f "${T37_DIR}/Archive.zip" ] && unzip -t "${T37_DIR}/Archive.zip" >/dev/null 2>&1; then
+    pass "Archive overwrite completed safely in Google Drive mount path structure"
+else
+    fail "Google Drive Overwrite" "Archive corrupted or missing in Google Drive path"
+fi
+
+# -------------------------------------------------------------------------
+# Test 38: Exhaustive Round-Trip Manifest Checksum Validation (50 Files)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 38] Exhaustive Round-Trip Manifest Checksum Validation (50 Files)..."
+T38_SRC="${TEST_DIR}/t38_manifest/SourceTree"
+mkdir -p "${T38_SRC}/FolderA/Sub1" "${T38_SRC}/FolderB" "${T38_SRC}/FolderC_TiếngViệt"
+
+for i in {1..20}; do
+    echo "Small text payload $i" > "${T38_SRC}/FolderA/file_$i.txt"
+done
+for i in {21..35}; do
+    echo "Sub folder payload $i" > "${T38_SRC}/FolderA/Sub1/deep_$i.txt"
+done
+for i in {36..45}; do
+    dd if=/dev/urandom of="${T38_SRC}/FolderB/random_$i.bin" bs=4096 count=$((i * 2)) status=none
+done
+for i in {46..50}; do
+    echo "Tài liệu tiếng Việt thứ $i - Đảm bảo toàn vẹn dữ liệu" > "${T38_SRC}/FolderC_TiếngViệt/văn_bản_$i.txt"
+done
+touch "${T38_SRC}/FolderB/empty.txt"
+
+SRC_MANIFEST="${TEST_DIR}/t38_manifest/src_manifest.txt"
+(cd "${T38_SRC}" && find . -type f | sort | while read -r f; do
+    shasum -a 256 "$f"
+done) | python3 -c 'import unicodedata, sys; [sys.stdout.write(unicodedata.normalize("NFC", line)) for line in sys.stdin]' > "${SRC_MANIFEST}"
+
+"${BUILD_BIN}" --compress --headless "${T38_SRC}" -o "${TEST_DIR}/t38_manifest/Tree.zip" >/dev/null 2>&1
+
+T38_DEST="${TEST_DIR}/t38_manifest/ExtractedTree"
+mkdir -p "${T38_DEST}"
+cp "${TEST_DIR}/t38_manifest/Tree.zip" "${T38_DEST}/"
+"${BUILD_BIN}" --quick --headless "${T38_DEST}/Tree.zip" >/dev/null 2>&1
+
+EXTRACT_MANIFEST="${TEST_DIR}/t38_manifest/extract_manifest.txt"
+(cd "${T38_DEST}/SourceTree" && find . -type f | sort | while read -r f; do
+    shasum -a 256 "$f"
+done) | python3 -c 'import unicodedata, sys; [sys.stdout.write(unicodedata.normalize("NFC", line)) for line in sys.stdin]' > "${EXTRACT_MANIFEST}"
+
+if diff -u "${SRC_MANIFEST}" "${EXTRACT_MANIFEST}" >/dev/null; then
+    pass "Exhaustive 50-file round-trip: 100% byte-for-byte SHA-256 manifest and hierarchy match!"
+else
+    fail "Manifest Validation" "Extracted file manifest differs from original source!"
+fi
+
+# -------------------------------------------------------------------------
+# Test 39: Exit Codes and Stderr Diagnostics Verification
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 39] Exit Codes & Stderr Diagnostic Accuracy..."
+T39_DIR="${TEST_DIR}/t39_exit"
+mkdir -p "${T39_DIR}"
+
+ERR_OUT=$("${BUILD_BIN}" --compress --headless "${T39_DIR}/non_existent_file.txt" -o "${T39_DIR}/out.zip" 2>&1 || true)
+if [ ! -f "${T39_DIR}/out.zip" ] && echo "${ERR_OUT}" | grep -q "Compression Error"; then
+    pass "Failure properly reported to stderr with descriptive error message and non-zero exit code"
+else
+    fail "Exit Diagnostic" "Missing error message on stderr or invalid exit code"
+fi
+
 echo ""
 echo "========================================================"
 echo "    Test Results: ${PASSED} Passed, ${FAILED} Failed"

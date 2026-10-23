@@ -10,22 +10,22 @@ This document outlines the product vision, completed milestones, and deep archit
 |---|---|---|---|
 | **Production Release R1** | `v1.2.0` | Native Extraction Engine & macOS Packaging | **Completed & Released** |
 | **Release Hardening** | `v1.2.1` | CI/CD on `macos-15-intel`, 7Z Stdin Passwords, Conflict Fixes | **Completed & Released** |
-| **Compression MVP** | `v1.3.0` | Native Streaming ZIP Engine & Dual Finder Services (4 Total) | **Completed & Verified (39 Tests)** |
-| **Advanced Compression** | `v1.4.0` | 7Z Engine, AES-256, Multipart Splitting, Ultra Resource Tuning | **Design Complete (Round C)** |
+| **Compression MVP** | `v1.3.0` | Native Streaming ZIP Engine & Dual Finder Services (4 Total) | **Completed & Released** |
+| **Data Integrity & Audit** | `v1.3.1` | Strict I/O & EINTR, Atomic Commit & Rollback, 50 Tests | **Completed & Verified (50 Tests)** |
+| **Advanced Compression** | `v1.4.0` | 7Z Engine, AES-256, Multipart Splitting, Ultra Resource Tuning | **Design Complete (Ready for Implementation)** |
 
 ---
 
-## Completed Milestones (v1.2.0 – v1.3.0)
+## Completed Milestones (v1.2.0 – v1.3.1)
 
 - [x] **Native Cocoa NSServices:** Exactly 4 clean Finder context menu items (2 extract, 2 compress) with zero Automator workflow duplicates.
 - [x] **Zero Duplicate Workflows:** Fully eliminated legacy Automator workflows and stale LaunchServices registrations.
 - [x] **Core ZIP Compression Engine:** Pure native `libarchive` streaming engine with 64 KB chunk buffers maintaining constant memory footprint (< 13 MB RSS).
-- [x] **Hierarchy & Folder Preservation:** Compressing folder `Photos/` yields `Photos.zip` preserving `Photos/...` internal tree. Quick extract recovers original structure cleanly.
-- [x] **Safety & Self-Inclusion Protections:** Destination archives inside source directories are safely excluded from archive payload; collision auto-renaming prevents overwriting.
-- [x] **POSIX realpath Canonicalization:** Robust path validation preventing `/tmp` vs `/private/tmp` symlink mismatch vulnerabilities.
-- [x] **Secure 7Z Password Piping:** Stdin password transmission eliminating credentials exposure from command-line arguments and logs.
-- [x] **Dual Functionality MainWindow:** Minimal AppKit GUI supporting drag-and-drop extraction or compression.
-- [x] **Extensive Verification Suite:** 39 automated integration, round-trip, benchmark, and security regression tests passing cleanly.
+- [x] **Strict Compression Data Integrity:** Elimination of silent file skipping; full `EINTR` and I/O error checks; entry byte-count and truncation validation; libarchive close verification. Never reports success on partial archives.
+- [x] **Atomic Commit & Data Rollback:** Pre-commit validation, native atomic file replacement, and non-destructive rollback preventing loss of existing archives upon failed commits (verified on Google Drive paths).
+- [x] **Symlink & Special File Security:** Preservation of symbolic links (`AE_IFLNK`) without following link destinations into parent entry paths; immediate non-blocking rejection of sockets, FIFOs, and devices.
+- [x] **Release Assets & Checksums Audit:** Full verification of GitHub Release v1.3.0 assets and synchronization of genuine SHA-256 digests.
+- [x] **Extensive Verification Suite:** 50 automated integration, round-trip, fault injection, benchmark, and security regression tests passing cleanly.
 
 ---
 
