@@ -82,6 +82,37 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
     
+    public func notifyCompressionSuccess(archiveURL: URL, totalItems: Int, archiveSize: Int64, elapsedTime: TimeInterval) {
+        let content = UNMutableNotificationContent()
+        content.title = "Nén hoàn tất"
+        let mb = Double(archiveSize) / 1_048_576.0
+        let sizeText: String
+        if mb < 0.1 {
+            let kb = Double(archiveSize) / 1024.0
+            sizeText = String(format: "%.1f KB", kb)
+        } else {
+            sizeText = String(format: "%.1f MB", mb)
+        }
+        content.body = "\(archiveURL.lastPathComponent): Đã nén \(totalItems) mục (\(sizeText)) trong \(String(format: "%.1fs", elapsedTime))."
+        content.sound = .default
+        content.categoryIdentifier = Self.categorySuccessID
+        content.userInfo = ["destinationPath": archiveURL.path]
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+    
+    public func notifyCompressionFailure(archiveName: String, error: Error) {
+        let content = UNMutableNotificationContent()
+        content.title = "Nén thất bại"
+        content.body = "\(archiveName): \(error.localizedDescription)"
+        content.sound = .defaultCritical
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    
     public static func showInFinder(url: URL) {
         DispatchQueue.main.async {
             NSWorkspace.shared.activateFileViewerSelecting([url])

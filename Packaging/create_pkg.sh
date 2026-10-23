@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-VERSION="${1:-1.2.1}"
+VERSION="${1:-1.3.0}"
 BUILD_APP="${PROJECT_DIR}/build/UpackX.app"
 DIST_DIR="${PROJECT_DIR}/dist"
 OUTPUT_PKG="${DIST_DIR}/UpackX-v${VERSION}-macOS-Intel.pkg"

@@ -98,4 +98,19 @@ public enum PathSecurity {
         
         return candidate
     }
+    
+    /// Resolves canonical POSIX path using realpath(3), resolving symlinks (such as macOS /tmp -> /private/tmp)
+    public static func canonicalPath(for url: URL) -> String {
+        var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+        if let ptr = realpath(url.path, &resolved) {
+            return String(cString: ptr)
+        }
+        let parent = url.deletingLastPathComponent().path
+        if let ptr = realpath(parent, &resolved) {
+            let parentPath = String(cString: ptr)
+            return (parentPath as NSString).appendingPathComponent(url.lastPathComponent)
+        }
+        return url.standardizedFileURL.path
+    }
 }
+

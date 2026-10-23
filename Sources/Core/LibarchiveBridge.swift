@@ -76,3 +76,59 @@ public func archive_entry_is_encrypted(_ entry: ArchiveEntryPtr) -> Int32
 
 @_silgen_name("archive_entry_symlink")
 public func archive_entry_symlink(_ entry: ArchiveEntryPtr) -> UnsafePointer<CChar>?
+
+// MARK: - Libarchive Write API
+
+@_silgen_name("archive_write_new")
+public func archive_write_new() -> ArchivePtr?
+
+@_silgen_name("archive_write_set_format_zip")
+public func archive_write_set_format_zip(_ a: ArchivePtr) -> Int32
+
+@_silgen_name("archive_write_set_options")
+public func archive_write_set_options(_ a: ArchivePtr, _ opts: UnsafePointer<CChar>) -> Int32
+
+@_silgen_name("archive_write_open_filename")
+public func archive_write_open_filename(_ a: ArchivePtr, _ filename: UnsafePointer<CChar>) -> Int32
+
+@_silgen_name("archive_write_header")
+public func archive_write_header(_ a: ArchivePtr, _ entry: ArchiveEntryPtr) -> Int32
+
+@_silgen_name("archive_write_data")
+public func archive_write_data(_ a: ArchivePtr, _ buff: UnsafeRawPointer, _ size: Int) -> Int
+
+@_silgen_name("archive_write_close")
+public func archive_write_close(_ a: ArchivePtr) -> Int32
+
+@_silgen_name("archive_write_free")
+public func archive_write_free(_ a: ArchivePtr) -> Int32
+
+// MARK: - Archive Entry Setters
+
+@_silgen_name("archive_entry_new")
+public func archive_entry_new() -> ArchiveEntryPtr?
+
+@_silgen_name("archive_entry_free")
+public func archive_entry_free(_ entry: ArchiveEntryPtr)
+
+@_silgen_name("archive_entry_set_pathname")
+public func archive_entry_set_pathname(_ entry: ArchiveEntryPtr, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("archive_entry_set_pathname_utf8")
+public func archive_entry_set_pathname_utf8(_ entry: ArchiveEntryPtr, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("archive_entry_set_size")
+public func archive_entry_set_size(_ entry: ArchiveEntryPtr, _ size: Int64)
+
+@_silgen_name("archive_entry_set_filetype")
+public func archive_entry_set_filetype(_ entry: ArchiveEntryPtr, _ type: UInt16)
+
+@_silgen_name("archive_entry_set_perm")
+public func archive_entry_set_perm(_ entry: ArchiveEntryPtr, _ mode: UInt16)
+
+@_silgen_name("archive_entry_set_mtime")
+public func archive_entry_set_mtime(_ entry: ArchiveEntryPtr, _ mtime: Int, _ ns: Int)
+
+@_silgen_name("archive_entry_set_symlink")
+public func archive_entry_set_symlink(_ entry: ArchiveEntryPtr, _ link: UnsafePointer<CChar>)
+

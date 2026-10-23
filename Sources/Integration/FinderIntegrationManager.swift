@@ -75,8 +75,12 @@ public final class FinderIntegrationManager {
     
     private func enableServicesInPreferences() {
         // Ensure services are explicitly enabled in pbs domain
-        let quickKey = "com.upackx.extractor - Giải nén nhanh với UpackX - quickExtractService"
-        let toKey = "com.upackx.extractor - Giải nén… với UpackX - extractToService"
+        let serviceKeys = [
+            "com.upackx.extractor - Giải nén nhanh với UpackX - quickExtractService",
+            "com.upackx.extractor - Giải nén… với UpackX - extractToService",
+            "com.upackx.extractor - Nén nhanh với UpackX - quickCompressService",
+            "com.upackx.extractor - Nén… với UpackX - compressToService"
+        ]
         
         let pbsConfig = """
         {
@@ -90,17 +94,13 @@ public final class FinderIntegrationManager {
         }
         """
         
-        let p1 = Process()
-        p1.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        p1.arguments = ["write", "pbs", "NSServicesStatus", "-dict-add", quickKey, pbsConfig]
-        try? p1.run()
-        p1.waitUntilExit()
-        
-        let p2 = Process()
-        p2.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        p2.arguments = ["write", "pbs", "NSServicesStatus", "-dict-add", toKey, pbsConfig]
-        try? p2.run()
-        p2.waitUntilExit()
+        for key in serviceKeys {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+            p.arguments = ["write", "pbs", "NSServicesStatus", "-dict-add", key, pbsConfig]
+            try? p.run()
+            p.waitUntilExit()
+        }
         
         // Flush and update pbs cache
         let pFlush = Process()
@@ -116,7 +116,7 @@ public final class FinderIntegrationManager {
         pUpdate.waitUntilExit()
     }
     
-    /// Verifies if both native Cocoa NSServices are currently configured in pbs
+    /// Verifies if all 4 native Cocoa NSServices are currently configured in pbs
     public func isServicesConfigured() -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
@@ -129,7 +129,10 @@ public final class FinderIntegrationManager {
             p.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard let output = String(data: data, encoding: .utf8) else { return false }
-            return output.contains("quickExtractService") && output.contains("extractToService")
+            return output.contains("quickExtractService") &&
+                   output.contains("extractToService") &&
+                   output.contains("quickCompressService") &&
+                   output.contains("compressToService")
         } catch {
             return false
         }

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-10-24
+
+### Added
+- **Core ZIP Compression Engine (`ZipCompressor`):**
+  - High-performance, streaming native ZIP compression powered by `libarchive`.
+  - Supports single file, single directory (preserving root folder structure, e.g. `Photos/` -> `Photos.zip`), and multiple items into unified `Archive.zip`.
+  - Source files and directories are strictly untouched and never modified or deleted.
+  - Streaming architecture with 64 KB chunk buffers maintaining constant low memory footprint (< 13 MB observed RSS).
+  - Configurable compression levels: Fast (level 1), Normal (level 6), and Maximum (level 9).
+  - Robust cancellation handling with automatic removal of staging temporary files (`.upackx_compress_<uuid>.tmp`).
+- **Finder Integration Expansion (4 Distinct Native NSServices):**
+  - **Nén nhanh với UpackX (`quickCompressService`):** One-click in-place ZIP compression with safe auto-renaming on conflict (no silent overwrite, no modal disruption).
+  - **Nén… với UpackX (`compressToService`):** Native AppKit modal window (`CompressToWindowController`) allowing custom archive name, destination folder picker, compression level selection, source size preview, and Cancel/Compress actions.
+  - Exactly 4 canonical UpackX actions in Finder's context menu (2 extract, 2 compress) with zero legacy Automator workflow duplicates.
+- **Safety & Integrity Protections:**
+  - Self-inclusion defense: output archive and temporary staging files are automatically excluded if placed inside the directory being compressed.
+  - Collision safety: existing files are never overwritten silently; automatic incrementing (`Archive (1).zip`) or interactive prompts prevent data loss.
+  - POSIX `realpath` path canonicalization resolving macOS `/tmp` (`/private/tmp`) symlink prefixes.
+- **Dual Functionality MainWindow:**
+  - Updated `MainWindowController` supporting drag-and-drop of both archives (to extract) and regular files/folders (to compress).
+  - Direct action buttons for "Chọn file giải nén..." and "Chọn file/thư mục nén...".
+- **Comprehensive Test Suite (39 Passing Tests):**
+  - Added Tests 23–29 covering single/multi-item round-trips, Vietnamese Unicode paths, deep hierarchies, large data streaming benchmarks, self-inclusion defense, collision safety, compression levels, and Finder NSService dispatch.
+
 ## [1.2.1] - 2026-10-24
 
 ### Fixed & Hardened
