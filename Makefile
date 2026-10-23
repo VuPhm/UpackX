@@ -1,9 +1,18 @@
-.PHONY: all build install uninstall test clean
+.PHONY: all build package release-check test install uninstall reinstall clean
 
 all: build
 
 build:
 	@./Scripts/build.sh
+
+package:
+	@./Packaging/package.sh
+
+release-check:
+	@./Packaging/release_check.sh
+
+test: build
+	@./Scripts/run_tests.sh
 
 install: build
 	@./Scripts/install.sh
@@ -14,10 +23,6 @@ uninstall:
 reinstall:
 	@./Scripts/reinstall.sh
 
-test: build
-	@./Scripts/run_tests.sh
-
 clean:
-	rm -rf build
+	rm -rf build dist
 	rm -rf /tmp/upackx_test*
-

@@ -37,6 +37,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
+        // Automatically ensure Finder services are active if installed in /Applications
+        if Bundle.main.bundlePath == "/Applications/UpackX.app" {
+            if !FinderIntegrationManager.shared.isServicesConfigured() {
+                _ = try? FinderIntegrationManager.shared.installServices()
+            }
+        }
+        
         // Give services and openFiles a moment to dispatch on startup
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }

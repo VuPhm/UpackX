@@ -1,0 +1,51 @@
+# Changelog
+
+All notable changes to **UpackX** will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [1.2.0] - 2026-10-24
+
+### Added
+- **Native macOS Packaging:**
+  - Standard Apple Disk Image (`UpackX-v1.2.0-macOS-Intel.dmg`) with drag-and-drop Applications shortcut.
+  - Apple Installer Package (`UpackX-v1.2.0-macOS-Intel.pkg`) built with `pkgbuild` and `productbuild` featuring Welcome, License, and Conclusion steps.
+  - Portable bundle ZIP archive preserving extended attributes via `ditto`.
+  - Automatic `SHA256SUMS.txt` generation and verification.
+- **Pre-Flight Release Automation:**
+  - Automated `make package` and `make release-check` workflows.
+  - GitHub Actions CI/CD workflows for macOS Intel (`macos-13`).
+- **Minimal Native AppIcon:**
+  - Custom minimal archive box icon with cyan electrical accents (`#38BDF8`) and graphite body.
+  - 10-resolution macOS iconset (`AppIcon.icns`) and vector master (`AppIcon.svg`).
+- **Multi-Part Volume Extraction:**
+  - Automatic group detection for multi-part archives (`.part1.rar`, `.7z.001`, `.z01`, `.r00`).
+  - Automatic identification and dispatch from non-first volume selection.
+  - Safe rejection of incomplete archive sets when volumes are missing.
+- **Safe Directory Merging:**
+  - Destination directories are preserved during extraction without destructive directory replacement.
+- **Google Drive for Desktop Support:**
+  - Compatible with mounted Google Drive directories, atomic rename fallbacks, and `SF_DATALESS` placeholder detection.
+
+### Changed
+- **Finder Integration Architecture:**
+  - Fully migrated to single, canonical **Native Cocoa NSServices** (`quickExtractService` and `extractToService`).
+  - Completely eliminated the previous duplicate 4 context menu items.
+  - Added user-session auto-registration on first launch from `/Applications`.
+- **Memory Streaming Engine:**
+  - Stream buffer optimization keeping memory consumption between 12.5 MB and 27.2 MB RSS regardless of archive size (tested up to 500 MB).
+
+---
+
+## [1.0.0] - 2026-10-23
+
+### Added
+- Initial release of UpackX core extractor engine.
+- Swift + AppKit native interface.
+- Support for ZIP, TAR.GZ, 7Z, RAR, BZ2, XZ formats.
+- Safe collision handling with interactive conflict dialogs.
+- Zip-Slip path traversal defense.
+- Password-protected archive support.

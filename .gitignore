@@ -1,4 +1,7 @@
 build/
+dist/
+*.dmg
+*.pkg
 .DS_Store
 *.swp
 *~

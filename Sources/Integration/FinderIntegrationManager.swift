@@ -116,6 +116,25 @@ public final class FinderIntegrationManager {
         pUpdate.waitUntilExit()
     }
     
+    /// Verifies if both native Cocoa NSServices are currently configured in pbs
+    public func isServicesConfigured() -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        p.arguments = ["read", "pbs", "NSServicesStatus"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return false }
+            return output.contains("quickExtractService") && output.contains("extractToService")
+        } catch {
+            return false
+        }
+    }
+    
     /// Checks and repairs Finder Integration if broken
     public func verifyAndRepair() -> (isValid: Bool, message: String) {
         do {

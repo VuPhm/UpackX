@@ -1,0 +1,20 @@
+#!/bin/bash
+set -e
+
+APP_PATH="/Applications/UpackX.app"
+
+# 1. Ensure appropriate system ownership and permissions for /Applications
+if [ -d "$APP_PATH" ]; then
+    chown -R root:admin "$APP_PATH" 2>/dev/null || true
+    chmod -R 755 "$APP_PATH" 2>/dev/null || true
+fi
+
+# 2. Inform LaunchServices of the newly installed application
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH" 2>/dev/null || true
+
+# 3. Create CLI symlink in /usr/local/bin if directory is available
+if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
+    ln -sf "$APP_PATH/Contents/MacOS/UpackX" "/usr/local/bin/upackx" 2>/dev/null || true
+fi
+
+exit 0

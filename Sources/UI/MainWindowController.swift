@@ -53,12 +53,26 @@ public final class MainWindowController: NSWindowController {
         selectFileButton.action = #selector(selectFileClicked)
         contentView.addSubview(selectFileButton)
         
-        installFinderButton.title = "Kích hoạt Finder Services"
         installFinderButton.frame = NSRect(x: 220, y: 16, width: 220, height: 32)
         installFinderButton.bezelStyle = .rounded
         installFinderButton.target = self
         installFinderButton.action = #selector(installFinderClicked)
         contentView.addSubview(installFinderButton)
+        
+        updateStatusDisplay()
+    }
+    
+    public func updateStatusDisplay() {
+        let isConfigured = FinderIntegrationManager.shared.isServicesConfigured()
+        let isInstalled = Bundle.main.bundlePath == "/Applications/UpackX.app"
+        
+        if isConfigured {
+            statusLabel.stringValue = "Finder Services: Đang hoạt động (2 mục) • Tối ưu Intel x86_64"
+            installFinderButton.title = "Kiểm tra Finder Services"
+        } else {
+            statusLabel.stringValue = isInstalled ? "Finder Services: Chưa bật • Nhấn để kích hoạt ngay" : "Khuyên dùng: Kéo UpackX vào /Applications"
+            installFinderButton.title = "Kích hoạt Finder Services"
+        }
     }
     
     @objc private func selectFileClicked() {
@@ -76,9 +90,10 @@ public final class MainWindowController: NSWindowController {
     @objc private func installFinderClicked() {
         do {
             try FinderIntegrationManager.shared.installServices()
+            updateStatusDisplay()
             let alert = NSAlert()
-            alert.messageText = "Đã kích hoạt Finder Services!"
-            alert.informativeText = "Đã thiết lập đúng 2 thao tác trong menu chuột phải của Finder:\n1. 'Giải nén nhanh với UpackX'\n2. 'Giải nén… với UpackX'"
+            alert.messageText = "Finder Services đã sẵn sàng!"
+            alert.informativeText = "UpackX đã thiết lập đúng 2 mục trong menu chuột phải Finder:\n\n1. 'Giải nén nhanh với UpackX'\n2. 'Giải nén… với UpackX'\n\nBạn có thể nhấp chuột phải vào bất kỳ file nén nào để sử dụng."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
