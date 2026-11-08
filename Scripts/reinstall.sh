@@ -33,6 +33,14 @@ if [ ! -d "${DEST_APP}" ]; then
     exit 1
 fi
 
+# Verify Document Icons presence
+ICNS_COUNT=$(find "${DEST_APP}/Contents/Resources" -maxdepth 1 -name "Document-*.icns" 2>/dev/null | wc -l | tr -d ' ')
+if [ "${ICNS_COUNT}" -ge 9 ]; then
+    echo "  ✔ Verified: All ${ICNS_COUNT} custom format-colored document icons installed."
+else
+    echo "  ⚠ Warning: Found ${ICNS_COUNT} Document-*.icns icons (expected 9)."
+fi
+
 # Verify no legacy workflows remain
 LEGACY_COUNT=$(find "${HOME}/Library/Services" -maxdepth 1 -name "UpackX*.workflow" 2>/dev/null | wc -l | tr -d ' ')
 if [ "${LEGACY_COUNT}" -gt 0 ]; then

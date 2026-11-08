@@ -25,9 +25,16 @@ else
     ln -sf "${DEST_APP}/Contents/MacOS/UpackX" "${HOME}/.local/bin/upackx"
 fi
 
+echo "=== Registering Document Types & LaunchServices ==="
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -x "${LSREGISTER}" ]; then
+    "${LSREGISTER}" -f "${DEST_APP}"
+fi
+touch "${DEST_APP}"
+
 echo "=== Activating Native Finder NSServices ==="
 "${DEST_APP}/Contents/MacOS/UpackX" --install-services
 
 echo "=== Installation Finished Successfully! ==="
-echo "UpackX.app is now in /Applications"
+echo "UpackX.app is now in /Applications with custom format-colored document icons."
 echo "Native Finder Services 'Giải nén nhanh với UpackX' and 'Giải nén… với UpackX' are active."

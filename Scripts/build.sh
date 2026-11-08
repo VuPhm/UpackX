@@ -36,6 +36,13 @@ if [ ! -f "${PROJECT_DIR}/Resources/AppIcon.icns" ]; then
 fi
 cp "${PROJECT_DIR}/Resources/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
+# Ensure all Document-*.icns icons are up to date and copied
+if [ ! -f "${PROJECT_DIR}/Resources/Document-ZIP.icns" ]; then
+    echo "Generating Document-*.icns icons..."
+    "${PROJECT_DIR}/Scripts/generate_document_icons.swift"
+fi
+cp "${PROJECT_DIR}/Resources"/Document-*.icns "${RESOURCES_DIR}/"
+
 # Copy Info.plist and PkgInfo
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 echo "APPL????" > "${APP_DIR}/Contents/PkgInfo"
