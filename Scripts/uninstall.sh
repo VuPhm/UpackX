@@ -51,7 +51,11 @@ keys = [
     "com.upackx.extractor - Giải nén nhanh với UpackX - quickExtractService",
     "com.upackx.extractor - Giải nén nhanh với UpackX - quickExtractService",
     "com.upackx.extractor - Giải nén… với UpackX - extractToService",
-    "com.upackx.extractor - Giải nén… với UpackX - extractToService"
+    "com.upackx.extractor - Giải nén… với UpackX - extractToService",
+    "com.upackx.extractor - Nén nhanh với UpackX - quickCompressService",
+    "com.upackx.extractor - Nén nhanh với UpackX - quickCompressService",
+    "com.upackx.extractor - Nén… với UpackX - compressToService",
+    "com.upackx.extractor - Nén… với UpackX - compressToService"
 ]
 for k in keys:
     subprocess.run(["/usr/libexec/PlistBuddy", "-c", f"Delete :NSServicesStatus:\"{k}\"", f"{subprocess.os.path.expanduser(\"~\")}/Library/Preferences/pbs.plist"], capture_output=True)

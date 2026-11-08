@@ -111,8 +111,17 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
-
     
+    public func notifyUpdateAvailable(version: String, releaseNotes: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Đã có bản cập nhật mới (v\(version))"
+        content.body = "UpackX v\(version) đã sẵn sàng. Nhấn để xem chi tiết và tải về."
+        content.sound = .default
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
     public static func showInFinder(url: URL) {
         DispatchQueue.main.async {
             NSWorkspace.shared.activateFileViewerSelecting([url])

@@ -5,9 +5,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var extractToController: ExtractToWindowController?
     private var compressToController: CompressToWindowController?
     private var activeProgressWC: ProgressWindowController?
+    private var updateWindowController: UpdateWindowController?
     
     private var isCommandLineInvocation: Bool = false
     private var isServiceInvocation: Bool = false
+    private var isRightClickInvocation: Bool = false
     private var isHeadless: Bool = false
     
     // Sequential Queue State (Extraction)
@@ -31,6 +33,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.servicesProvider = self
+        setupMainMenu()
         
         let nonSystemArgs = Array(CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") })
         if !nonSystemArgs.isEmpty {
@@ -45,13 +48,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         
+        // Periodic non-intrusive background update check
+        UpdateManager.shared.checkInBackgroundIfNeeded()
+        
         // Give services and openFiles a moment to dispatch on startup
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self = self else { return }
-            if !self.isCommandLineInvocation && !self.isServiceInvocation && self.taskQueue.isEmpty && self.extractToController == nil && self.compressToController == nil {
+            if !self.isCommandLineInvocation &&
+                !self.isServiceInvocation &&
+                !self.isRightClickInvocation &&
+                self.taskQueue.isEmpty &&
+                self.extractToController == nil &&
+                self.compressToController == nil &&
+                self.activeProgressWC == nil {
                 self.showMainWindow()
             }
         }
+    }
+    
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
     }
     
     private func showMainWindow() {
@@ -90,6 +106,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 fputs("Error installing services: \(error.localizedDescription)\n", stderr)
                 exit(1)
             }
+        }
+        
+        if args.contains("--check-update") {
+            print("Đang kiểm tra bản cập nhật UpackX (Hiện tại: v\(UpdateManager.shared.currentVersionString))...")
+            UpdateManager.shared.checkForUpdates { result in
+                switch result {
+                case .upToDate(let cur):
+                    print("UpackX v\(cur) là phiên bản mới nhất.")
+                    exit(0)
+                case .updateAvailable(let info):
+                    print("Đã có phiên bản mới: v\(info.version) (\(info.title))")
+                    if let d = info.downloadURL {
+                        print("Tải về: \(d.absoluteString)")
+                    }
+                    print("Trang phát hành: \(info.htmlURL.absoluteString)")
+                    exit(0)
+                case .error(let err):
+                    fputs("Lỗi kiểm tra cập nhật: \(err)\n", stderr)
+                    exit(1)
+                }
+            }
+            CFRunLoopRun()
+            return
         }
         
         var isCompression = false
@@ -179,6 +218,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     public func application(_ application: NSApplication, openFiles filenames: [String]) {
         guard !isCommandLineInvocation else { return }
+        self.isRightClickInvocation = true
         let urls = filenames.map { URL(fileURLWithPath: $0) }
         
         // If all items are recognized archives, extract. Otherwise, compress.
@@ -195,9 +235,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc public func quickExtractService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         isServiceInvocation = true
+        isRightClickInvocation = true
         let urls = extractURLs(from: pboard)
         guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hợp lệ trong pasteboard." as NSString
+            checkTerminationIfNeeded()
             return
         }
         let tasks = MultipartDetector.groupArchives(urls)
@@ -206,9 +248,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc public func extractToService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         isServiceInvocation = true
+        isRightClickInvocation = true
         let urls = extractURLs(from: pboard)
         guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hợp lệ trong pasteboard." as NSString
+            checkTerminationIfNeeded()
             return
         }
         let tasks = MultipartDetector.groupArchives(urls)
@@ -217,9 +261,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc public func quickCompressService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         isServiceInvocation = true
+        isRightClickInvocation = true
         let urls = extractURLs(from: pboard)
         guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hoặc thư mục hợp lệ trong pasteboard." as NSString
+            checkTerminationIfNeeded()
             return
         }
         startQuickCompression(sources: urls)
@@ -227,9 +273,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc public func compressToService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         isServiceInvocation = true
+        isRightClickInvocation = true
         let urls = extractURLs(from: pboard)
         guard !urls.isEmpty else {
             error.pointee = "Không tìm thấy file hoặc thư mục hợp lệ trong pasteboard." as NSString
+            checkTerminationIfNeeded()
             return
         }
         showCompressToDialog(sources: urls)
@@ -596,7 +644,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func checkTerminationIfNeeded() {
-        if (isCommandLineInvocation || isServiceInvocation) &&
+        if (isCommandLineInvocation || isServiceInvocation || isRightClickInvocation) &&
             activeProgressWC == nil &&
             extractToController == nil &&
             compressToController == nil &&
@@ -604,7 +652,106 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             if isCommandLineInvocation {
                 exit(failedCount > 0 ? 1 : (isCancelled ? 130 : 0))
             } else {
+                mainWindowController?.close()
+                mainWindowController = nil
                 NSApp.terminate(nil)
+            }
+        }
+    }
+    
+    // MARK: - Native Application Menu & Updates
+    
+    public func setupMainMenu() {
+        let mainMenu = NSMenu()
+        
+        // 1. App Menu
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        
+        let appName = "UpackX"
+        let aboutItem = NSMenuItem(title: "Giới thiệu \(appName)", action: #selector(showAboutWindow), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        
+        let updateItem = NSMenuItem(title: "Kiểm tra cập nhật...", action: #selector(checkForUpdatesClicked), keyEquivalent: "")
+        updateItem.target = self
+        appMenu.addItem(updateItem)
+        
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Ẩn \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthersItem = NSMenuItem(title: "Ẩn các ứng dụng khác", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthersItem)
+        appMenu.addItem(withTitle: "Hiện tất cả", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Thoát \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        
+        // 2. Edit Menu (Crucial for Cut, Copy, Paste, Select All in Text Fields)
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Chỉnh sửa")
+        editMenuItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Hoàn tác", action: Selector(("undo:")), keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Làm lại", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(redoItem)
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cắt", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Sao chép", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Dán", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Chọn tất cả", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        
+        // 3. Window Menu
+        let windowMenuItem = NSMenuItem()
+        mainMenu.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: "Cửa sổ")
+        windowMenuItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Thu nhỏ", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Phóng to", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(NSMenuItem.separator())
+        windowMenu.addItem(withTitle: "Đóng cửa sổ", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        
+        NSApp.mainMenu = mainMenu
+        NSApp.windowsMenu = windowMenu
+    }
+    
+    @objc public func showAboutWindow() {
+        let credits = NSMutableAttributedString(string: "UpackX — Trình nén & giải nén Native Intel x86_64 cho macOS\nBản quyền © 2026 UpackX. All rights reserved.")
+        let options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "UpackX",
+            .applicationVersion: UpdateManager.shared.currentVersionString,
+            .version: "\(UpdateManager.shared.currentVersionString) (Build 5)",
+            .credits: credits
+        ]
+        NSApp.orderFrontStandardAboutPanel(options)
+    }
+    
+    @objc public func checkForUpdatesClicked() {
+        UpdateManager.shared.checkForUpdates { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .updateAvailable(let info):
+                let uwc = UpdateWindowController(updateInfo: info)
+                self.updateWindowController = uwc
+                uwc.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                
+            case .upToDate(let ver):
+                let alert = NSAlert()
+                alert.messageText = "Đang ở phiên bản mới nhất"
+                alert.informativeText = "UpackX v\(ver) là phiên bản mới nhất hiện có."
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                
+            case .error(let msg):
+                let alert = NSAlert()
+                alert.messageText = "Lỗi kiểm tra cập nhật"
+                alert.informativeText = msg
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
             }
         }
     }

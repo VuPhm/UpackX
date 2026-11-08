@@ -68,5 +68,5 @@ fi
 echo ""
 echo "=========================================================="
 echo "    Clean Reinstall Completed Successfully!"
-echo "    Exactly 2 native services active in Finder."
+echo "    Exactly 4 native services active in Finder."
 echo "=========================================================="

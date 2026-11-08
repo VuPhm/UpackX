@@ -1,12 +1,14 @@
 import AppKit
 import UniformTypeIdentifiers
 
-public final class CompressToWindowController: NSWindowController {
+public final class CompressToWindowController: NSWindowController, NSWindowDelegate {
     public var onConfirm: ((URL, CompressionLevel) -> Void)?
     public var onCancel: (() -> Void)?
     
     private let sources: [URL]
     private var selectedDestinationDirectory: URL
+    private var isConfirmed = false
+    private var isCancelled = false
     
     private let nameTextField = NSTextField()
     private let pathTextField = NSTextField()
@@ -27,10 +29,10 @@ public final class CompressToWindowController: NSWindowController {
         )
         window.title = "UpackX — Tùy chọn nén ZIP"
         window.center()
-        window.level = .floating
         window.isReleasedWhenClosed = false
         
         super.init(window: window)
+        window.delegate = self
         setupUI()
         calculateSourceInfo()
     }
@@ -102,8 +104,16 @@ public final class CompressToWindowController: NSWindowController {
         
         pathTextField.frame = NSRect(x: 20, y: 108, width: 360, height: 22)
         pathTextField.stringValue = selectedDestinationDirectory.path
-        pathTextField.isEditable = false
-        pathTextField.lineBreakMode = .byTruncatingHead
+        pathTextField.isEditable = true
+        pathTextField.isSelectable = true
+        pathTextField.isBezeled = true
+        pathTextField.bezelStyle = .roundedBezel
+        pathTextField.lineBreakMode = .byClipping
+        pathTextField.cell?.wraps = false
+        pathTextField.cell?.isScrollable = true
+        pathTextField.placeholderString = "Đường dẫn thư mục lưu..."
+        pathTextField.target = self
+        pathTextField.action = #selector(compressClicked)
         contentView.addSubview(pathTextField)
         
         browseButton.frame = NSRect(x: 388, y: 104, width: 82, height: 28)
@@ -145,6 +155,11 @@ public final class CompressToWindowController: NSWindowController {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.window?.makeFirstResponder(self.nameTextField)
+            self.nameTextField.currentEditor()?.selectAll(nil)
+        }
     }
     
     private func calculateSourceInfo() {
@@ -211,12 +226,92 @@ public final class CompressToWindowController: NSWindowController {
         }
     }
     
-    @objc private func cancelClicked() {
-        window?.close()
+    private func notifyCancelIfNeeded() {
+        guard !isConfirmed && !isCancelled else { return }
+        isCancelled = true
         onCancel?()
     }
     
+    @objc private func cancelClicked() {
+        notifyCancelIfNeeded()
+        window?.close()
+    }
+    
+    public func windowWillClose(_ notification: Notification) {
+        notifyCancelIfNeeded()
+    }
+    
     @objc private func compressClicked() {
+        validateAndProceed()
+    }
+    
+    private func validateAndProceed() {
+        let rawPath = pathTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "Đường dẫn không hợp lệ"
+            alert.informativeText = "Vui lòng nhập đường dẫn thư mục lưu file nén."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            pathTextField.becomeFirstResponder()
+            return
+        }
+        
+        let expandedPath = (rawPath as NSString).expandingTildeInPath
+        let targetURL = URL(fileURLWithPath: expandedPath).standardized
+        
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: targetURL.path, isDirectory: &isDir)
+        
+        if exists {
+            if !isDir.boolValue {
+                let alert = NSAlert()
+                alert.messageText = "Đường dẫn không hợp lệ"
+                alert.informativeText = "Đường dẫn \"\(targetURL.lastPathComponent)\" đã tồn tại nhưng là một tệp tin, không phải thư mục.\nVui lòng chỉ định một thư mục khác."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "OK")
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+                pathTextField.becomeFirstResponder()
+                return
+            }
+            self.selectedDestinationDirectory = targetURL
+            executeProceed()
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "Thư mục chưa tồn tại"
+            alert.informativeText = "Thư mục lưu:\n\(targetURL.path)\n\nchưa tồn tại. Bạn có muốn tạo thư mục này không?"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Tạo thư mục")
+            alert.addButton(withTitle: "Hủy")
+            
+            NSApp.activate(ignoringOtherApps: true)
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                do {
+                    try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+                    self.selectedDestinationDirectory = targetURL
+                    self.executeProceed()
+                } catch {
+                    let errAlert = NSAlert()
+                    errAlert.messageText = "Không thể tạo thư mục"
+                    errAlert.informativeText = "Lỗi khi tạo thư mục lưu:\n\(error.localizedDescription)"
+                    errAlert.alertStyle = .critical
+                    errAlert.addButton(withTitle: "OK")
+                    NSApp.activate(ignoringOtherApps: true)
+                    errAlert.runModal()
+                    pathTextField.becomeFirstResponder()
+                }
+            } else {
+                pathTextField.becomeFirstResponder()
+            }
+        }
+    }
+    
+    private func executeProceed() {
         var rawName = nameTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if rawName.isEmpty {
             rawName = "Archive.zip"
@@ -228,6 +323,7 @@ public final class CompressToWindowController: NSWindowController {
         let destinationURL = selectedDestinationDirectory.appendingPathComponent(rawName)
         let selectedLevel = (levelPopUp.selectedItem?.representedObject as? CompressionLevel) ?? .normal
         
+        isConfirmed = true
         window?.close()
         onConfirm?(destinationURL, selectedLevel)
     }

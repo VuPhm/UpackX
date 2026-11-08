@@ -1,7 +1,7 @@
 import AppKit
 import UniformTypeIdentifiers
 
-public final class MainWindowController: NSWindowController {
+public final class MainWindowController: NSWindowController, NSWindowDelegate {
     public var onFileSelected: ((URL, Bool) -> Void)? // Extraction: URL, isQuickExtract
     public var onCompressSelected: (([URL], Bool) -> Void)? // Compression: URLs, isQuickCompress
     
@@ -10,6 +10,8 @@ public final class MainWindowController: NSWindowController {
     private let extractButton = NSButton(title: "Chọn file giải nén...", target: nil, action: nil)
     private let compressButton = NSButton(title: "Chọn file/thư mục nén...", target: nil, action: nil)
     private let installFinderButton = NSButton(title: "Cài đặt Finder Services", target: nil, action: nil)
+    private let checkUpdateButton = NSButton(title: "Kiểm tra cập nhật...", target: nil, action: nil)
+    private var updateWindowController: UpdateWindowController?
     
     public init() {
         let window = NSWindow(
@@ -23,7 +25,12 @@ public final class MainWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         
         super.init(window: window)
+        window.delegate = self
         setupUI()
+    }
+    
+    public func windowWillClose(_ notification: Notification) {
+        NSApp.terminate(nil)
     }
     
     required init?(coder: NSCoder) {
@@ -61,12 +68,18 @@ public final class MainWindowController: NSWindowController {
         compressButton.action = #selector(selectCompressClicked)
         contentView.addSubview(compressButton)
         
-        // Action Button Row 2: Finder Services Manager
-        installFinderButton.frame = NSRect(x: 120, y: 12, width: 260, height: 28)
+        // Action Button Row 2: Finder Services & Updates
+        installFinderButton.frame = NSRect(x: 35, y: 12, width: 205, height: 28)
         installFinderButton.bezelStyle = .rounded
         installFinderButton.target = self
         installFinderButton.action = #selector(installFinderClicked)
         contentView.addSubview(installFinderButton)
+        
+        checkUpdateButton.frame = NSRect(x: 260, y: 12, width: 205, height: 28)
+        checkUpdateButton.bezelStyle = .rounded
+        checkUpdateButton.target = self
+        checkUpdateButton.action = #selector(checkUpdateClicked)
+        contentView.addSubview(checkUpdateButton)
         
         updateStatusDisplay()
     }
@@ -125,6 +138,42 @@ public final class MainWindowController: NSWindowController {
             alert.alertStyle = .critical
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+    
+    @objc public func checkUpdateClicked() {
+        checkUpdateButton.isEnabled = false
+        let originalTitle = checkUpdateButton.title
+        checkUpdateButton.title = "Đang kiểm tra..."
+        
+        UpdateManager.shared.checkForUpdates { [weak self] result in
+            guard let self = self else { return }
+            self.checkUpdateButton.isEnabled = true
+            self.checkUpdateButton.title = originalTitle
+            
+            switch result {
+            case .updateAvailable(let info):
+                let uwc = UpdateWindowController(updateInfo: info)
+                self.updateWindowController = uwc
+                uwc.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                
+            case .upToDate(let ver):
+                let alert = NSAlert()
+                alert.messageText = "Đang ở phiên bản mới nhất"
+                alert.informativeText = "UpackX v\(ver) là phiên bản mới nhất hiện có."
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                
+            case .error(let msg):
+                let alert = NSAlert()
+                alert.messageText = "Lỗi kiểm tra cập nhật"
+                alert.informativeText = msg
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
         }
     }
     

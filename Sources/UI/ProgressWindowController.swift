@@ -1,9 +1,10 @@
 import AppKit
 import UniformTypeIdentifiers
 
-public final class ProgressWindowController: NSWindowController {
+public final class ProgressWindowController: NSWindowController, NSWindowDelegate {
     public var onCancel: (() -> Void)?
     public private(set) var isCancelled: Bool = false
+    private var isClosingProgrammatically: Bool = false
     
     private let titleLabel = NSTextField(labelWithString: "Đang giải nén...")
     private let fileLabel = NSTextField(labelWithString: "")
@@ -24,6 +25,7 @@ public final class ProgressWindowController: NSWindowController {
         panel.isReleasedWhenClosed = false
         
         super.init(window: panel)
+        panel.delegate = self
         setupUI(archiveName: archiveName, isCompressing: isCompressing)
     }
     
@@ -72,10 +74,22 @@ public final class ProgressWindowController: NSWindowController {
     }
     
     @objc private func cancelClicked() {
+        guard !isCancelled && !isClosingProgrammatically else { return }
         isCancelled = true
         cancelButton.isEnabled = false
         detailLabel.stringValue = "Đang hủy tác vụ..."
         onCancel?()
+    }
+    
+    public override func close() {
+        isClosingProgrammatically = true
+        super.close()
+    }
+    
+    public func windowWillClose(_ notification: Notification) {
+        if !isCancelled && !isClosingProgrammatically {
+            cancelClicked()
+        }
     }
     
     public func update(progress: ExtractionProgress) {
