@@ -8,11 +8,17 @@ let scriptURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinks
 let projectDir = scriptURL.deletingLastPathComponent().deletingLastPathComponent()
 let resourcesDir = projectDir.appendingPathComponent("Resources")
 let svgURL = resourcesDir.appendingPathComponent("AppIcon.svg")
+let pngURL = resourcesDir.appendingPathComponent("AppIcon-1024.png")
 let iconsetURL = resourcesDir.appendingPathComponent("AppIcon.iconset")
 let icnsURL = resourcesDir.appendingPathComponent("AppIcon.icns")
 
-guard let svgImage = NSImage(contentsOf: svgURL) else {
-    fputs("Error: Could not load SVG at \(svgURL.path)\n", stderr)
+let sourceImage: NSImage
+if let png = NSImage(contentsOf: pngURL) {
+    sourceImage = png
+} else if let svg = NSImage(contentsOf: svgURL) {
+    sourceImage = svg
+} else {
+    fputs("Error: Could not load icon source at \(pngURL.path) or \(svgURL.path)\n", stderr)
     exit(1)
 }
 
@@ -57,7 +63,7 @@ for item in sizes {
     context.imageInterpolation = .high
 
     let rect = NSRect(x: 0, y: 0, width: px, height: px)
-    svgImage.draw(in: rect, from: .zero, operation: .copy, fraction: 1.0)
+    sourceImage.draw(in: rect, from: .zero, operation: .copy, fraction: 1.0)
 
     NSGraphicsContext.restoreGraphicsState()
 

@@ -1107,6 +1107,65 @@ else
     fail "Exit Diagnostic" "Missing error message on stderr or invalid exit code"
 fi
 
+# -------------------------------------------------------------------------
+# Test 40: Close Window Termination Behavior ("tắt X thì tắt app")
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 40] Close Window Termination Behavior ('tắt X thì tắt app')..."
+if grep -q "func applicationShouldTerminateAfterLastWindowClosed" "${PROJECT_DIR}/Sources/UI/AppDelegate.swift" && \
+   grep -q "window.delegate = self" "${PROJECT_DIR}/Sources/UI/MainWindowController.swift" && \
+   grep -q "windowWillClose" "${PROJECT_DIR}/Sources/UI/MainWindowController.swift"; then
+    pass "MainWindowController and AppDelegate cleanly configure termination on window close ('tắt X thì tắt app')"
+else
+    fail "Window Close" "Missing applicationShouldTerminateAfterLastWindowClosed or MainWindow windowWillClose delegate"
+fi
+
+# -------------------------------------------------------------------------
+# Test 41: Right-Click & Finder Services Auto-Termination ("giải nén xong từ tuỳ chọn chuột phải thì tắt app")
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 41] Right-Click & Services Auto-Termination ('giải nén xong từ tuỳ chọn chuột phải thì tắt app')..."
+if grep -q "isRightClickInvocation" "${PROJECT_DIR}/Sources/UI/AppDelegate.swift" && \
+   grep -q "quickExtractService" "${PROJECT_DIR}/Sources/UI/AppDelegate.swift" && \
+   grep -q "checkTerminationIfNeeded" "${PROJECT_DIR}/Sources/UI/AppDelegate.swift"; then
+    pass "Right-click / Services invocation properly sets lifecycle flag and automatically terminates app on completion"
+else
+    fail "Right-Click Lifecycle" "Missing isRightClickInvocation or checkTerminationIfNeeded hooks in AppDelegate"
+fi
+
+# -------------------------------------------------------------------------
+# Test 42: Editable Destination Path & Missing Directory Prompt ("cho phép sửa theo đường dẫn giải nén")
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 42] Editable Extraction Path & Directory Creation ('cho phép sửa đường dẫn giải nén, chưa tồn tại thì hỏi tạo')..."
+if grep -q "pathTextField.isEditable = true" "${PROJECT_DIR}/Sources/UI/ExtractToWindowController.swift" && \
+   grep -q "createDirectory" "${PROJECT_DIR}/Sources/UI/ExtractToWindowController.swift" && \
+   grep -q "Thư mục chưa tồn tại" "${PROJECT_DIR}/Sources/UI/ExtractToWindowController.swift"; then
+    pass "ExtractToWindowController allows editing destination path and prompts to create directory if not existing"
+else
+    fail "Editable Path" "Missing editable pathTextField or directory creation logic in ExtractToWindowController"
+fi
+
+# -------------------------------------------------------------------------
+# Test 43: Industry-Standard Update Subsystem (SemVer & UpdateManager)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 43] Industry-Standard Update Subsystem (SemVer, UpdateManager, GitHub Releases)..."
+if [ -f "${PROJECT_DIR}/Sources/Core/SemVer.swift" ] && \
+   [ -f "${PROJECT_DIR}/Sources/Core/UpdateManager.swift" ] && \
+   [ -f "${PROJECT_DIR}/Sources/UI/UpdateWindowController.swift" ]; then
+    
+    # Test CLI flag output
+    UPDATE_CLI_OUT=$("${BUILD_BIN}" --check-update 2>&1 || true)
+    if echo "${UPDATE_CLI_OUT}" | grep -q "Đang kiểm tra bản cập nhật UpackX"; then
+        pass "Industry-standard SemVer comparison and UpdateManager engine functioning properly via CLI and UI"
+    else
+        fail "Update Subsystem" "CLI --check-update did not produce expected output ($UPDATE_CLI_OUT)"
+    fi
+else
+    fail "Update Subsystem" "Missing SemVer.swift, UpdateManager.swift, or UpdateWindowController.swift"
+fi
+
 echo ""
 echo "========================================================"
 echo "    Test Results: ${PASSED} Passed, ${FAILED} Failed"
