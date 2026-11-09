@@ -12,7 +12,7 @@ This document outlines the product vision, completed milestones, and deep archit
 | **Release Hardening** | `v1.2.1` | CI/CD on `macos-15-intel`, 7Z Stdin Passwords, Conflict Fixes | **Completed & Released** |
 | **Compression MVP** | `v1.3.0` | Native Streaming ZIP Engine & Dual Finder Services (4 Total) | **Completed & Released** |
 | **Data Integrity & Audit** | `v1.3.1` | Strict I/O & EINTR, Atomic Commit & Rollback, 50 Tests | **Completed & Verified (50 Tests)** |
-| **Advanced Compression** | `v1.4.0` | 7Z Engine, AES-256, Multipart Splitting, Ultra Resource Tuning | **Design Complete (Ready for Implementation)** |
+| **Release Readiness & UX** | `v1.4.0` | Universal 2 (Apple Silicon & Intel), First-Launch Trust UX, Packaging Pipeline | **Completed & Verified (54 Tests)** |
 
 ---
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-11-09
+
+### Added
+- **Universal 2 Architecture Support (Apple Silicon & Intel):**
+  - Compiled and packaged both main executable (`UpackX`) and standalone helper (`7zz`) as fat Universal 2 binaries containing native `arm64` and `x86_64` Mach-O slices for macOS 14.0+ Sonoma and Sequoia 15+.
+  - Fully self-contained with zero Homebrew runtime dependencies.
+- **First-Launch Trust UX & Bundled Guide:**
+  - Lightweight, responsive bilingual HTML guide (`Packaging/html/install_guide.html`) bundled directly inside distribution DMG (`Hướng Dẫn Cài Đặt (Install Guide).html`).
+  - Clear, user-friendly guidance for macOS 14 Sonoma and macOS 15 Sequoia through System Settings → Privacy & Security → Open Anyway.
+  - Distinction between expected unnotarized developer notices and dangerous damaged/malicious app warnings.
+- **Context Menu UTI Filtering:**
+  - Strict filtering in `Info.plist`: removed `public.item` and `public.data` from extraction NSServices to prevent menu clutter on generic files and folders.
+- **Architecture-Aware Update Subsystem (`UpdateManager`):**
+  - Migrated update endpoint from `/releases/latest` to `/releases` for proper handling of stable and prerelease channels.
+  - Added architecture and format scoring selecting Universal DMGs or matching host CPU.
+- **Release Pre-Flight QA Verification (`Packaging/release_check.sh`):**
+  - Automated 24-point check validating Mach-O slices, helper runability, system linkages, codesign integrity, DMG layout, and SHA-256 checksums.
+
 ## [1.3.1] - 2026-10-24
 
 ### Fixed & Hardened

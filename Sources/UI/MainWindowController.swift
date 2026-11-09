@@ -86,14 +86,25 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
     
     public func updateStatusDisplay() {
         let isConfigured = FinderIntegrationManager.shared.isServicesConfigured()
-        let isInstalled = Bundle.main.bundlePath == "/Applications/UpackX.app"
+        let isInstalled = FinderIntegrationManager.shared.isInstalledInApplications
+        
+        #if arch(arm64)
+        let archDisplay = "Apple Silicon (arm64)"
+        #elseif arch(x86_64)
+        let archDisplay = "Intel (x86_64)"
+        #else
+        let archDisplay = "Universal 2"
+        #endif
         
         if isConfigured {
-            statusLabel.stringValue = "Finder Services: Đang hoạt động (4 mục: 2 nén, 2 giải nén) • Intel x86_64"
+            statusLabel.stringValue = "Finder Services: Đang hoạt động (4 mục: 2 nén, 2 giải nén) • \(archDisplay)"
             installFinderButton.title = "Kiểm tra Finder Services"
+        } else if !isInstalled {
+            statusLabel.stringValue = "Khuyên dùng: Kéo UpackX vào /Applications để tích hợp Finder • \(archDisplay)"
+            installFinderButton.title = "Hướng dẫn cài đặt vào /Applications"
         } else {
-            statusLabel.stringValue = isInstalled ? "Finder Services: Chưa bật đủ 4 mục • Nhấn để kích hoạt ngay" : "Khuyên dùng: Kéo UpackX vào /Applications để tích hợp Finder"
-            installFinderButton.title = "Kích hoạt Finder Services (4 mục)"
+            statusLabel.stringValue = "Finder Services: Chưa hoàn tất • Nhấn để làm mới • \(archDisplay)"
+            installFinderButton.title = "Làm mới Finder Services (4 mục)"
         }
     }
     
@@ -122,22 +133,30 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
     
     @objc private func installFinderClicked() {
-        do {
-            try FinderIntegrationManager.shared.installServices()
-            updateStatusDisplay()
-            let alert = NSAlert()
-            alert.messageText = "Finder Services đã sẵn sàng!"
-            alert.informativeText = "UpackX đã thiết lập đúng 4 mục trong menu ngữ cảnh chuột phải của Finder:\n\n1. 'Giải nén nhanh với UpackX'\n2. 'Giải nén… với UpackX'\n3. 'Nén nhanh với UpackX'\n4. 'Nén… với UpackX'\n\nBạn có thể nhấp chuột phải vào bất kỳ file hoặc thư mục nào để sử dụng."
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Lỗi kích hoạt Finder Services"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .critical
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+        FinderIntegrationManager.shared.refreshServices()
+        updateStatusDisplay()
+        
+        let alert = NSAlert()
+        alert.messageText = "Trạng thái Finder Services (4 mục)"
+        alert.informativeText = """
+        UpackX đã khai báo chuẩn 4 tác vụ với macOS LaunchServices:
+        1. 'Giải nén nhanh với UpackX'
+        2. 'Giải nén… với UpackX'
+        3. 'Nén nhanh với UpackX'
+        4. 'Nén… với UpackX'
+
+        💡 Hướng dẫn bật thủ công (nếu chưa thấy trong menu chuột phải):
+        • Trên macOS 14 Sonoma & macOS 15 Sequoia:
+          Vào: Cài đặt hệ thống (System Settings) → Bàn phím (Keyboard) → Phím tắt bàn phím (Keyboard Shortcuts) → Dịch vụ (Services) → Tệp và thư mục (Files and Folders).
+          Tích chọn 4 mục của UpackX.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Đã hiểu")
+        alert.addButton(withTitle: "Mở Cài đặt hệ thống")
+        
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            FinderIntegrationManager.openSystemSettingsKeyboardServices()
         }
     }
     

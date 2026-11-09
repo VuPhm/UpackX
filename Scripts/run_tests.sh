@@ -222,7 +222,7 @@ let ok = (tasks.count == 3 && primaryNames.contains("movie.part1.rar") && primar
 exit(ok ? 0 : 1)
 EOF
 
-swiftc -target x86_64-apple-macos14.0 \
+swiftc -target $(uname -m)-apple-macos14.0 \
     "${PROJECT_DIR}/Sources/Core/MultipartDetector.swift" \
     "${SWIFT_TEST_SCRIPT}" \
     -o "${TEST_DIR}/test_multipart"

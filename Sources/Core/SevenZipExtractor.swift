@@ -17,10 +17,12 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
             }
         }
         
-        // Fallback to /usr/local/bin/7zz or system PATH
-        if FileManager.default.fileExists(atPath: "/usr/local/bin/7zz") {
-            self.bundledBinaryURL = URL(fileURLWithPath: "/usr/local/bin/7zz")
-            return
+        // Fallback to system locations if not bundled
+        for fallbackPath in ["/opt/homebrew/bin/7zz", "/usr/local/bin/7zz"] {
+            if FileManager.default.fileExists(atPath: fallbackPath) {
+                self.bundledBinaryURL = URL(fileURLWithPath: fallbackPath)
+                return
+            }
         }
         
         self.bundledBinaryURL = nil

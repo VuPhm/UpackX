@@ -37,4 +37,4 @@ echo "=== Activating Native Finder NSServices ==="
 
 echo "=== Installation Finished Successfully! ==="
 echo "UpackX.app is now in /Applications with custom format-colored document icons."
-echo "Native Finder Services 'Giải nén nhanh với UpackX' and 'Giải nén… với UpackX' are active."
+echo "Native Finder Services (2 Nén, 2 Giải nén) are ready for use."

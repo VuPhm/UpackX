@@ -6,39 +6,23 @@ public final class FinderIntegrationManager {
     
     public let servicesDirectory: URL
     
+    public static let expectedServiceNames = [
+        "Giải nén nhanh với UpackX",
+        "Giải nén… với UpackX",
+        "Nén nhanh với UpackX",
+        "Nén… với UpackX"
+    ]
+    
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.servicesDirectory = home.appendingPathComponent("Library/Services", isDirectory: true)
     }
     
-    public var isInstalled: Bool {
-        return FileManager.default.fileExists(atPath: "/Applications/UpackX.app")
+    public var isInstalledInApplications: Bool {
+        return Bundle.main.bundlePath == "/Applications/UpackX.app" || FileManager.default.fileExists(atPath: "/Applications/UpackX.app")
     }
     
-    /// Configures and enables native Cocoa NSServices for UpackX, removing any legacy Automator workflows
-    @discardableResult
-    public func installServices() throws -> Bool {
-        // 1. Clean up all legacy Automator workflows from ~/Library/Services to prevent duplicate menus
-        cleanLegacyWorkflows()
-        
-        let appBundlePath = "/Applications/UpackX.app"
-        
-        // 2. Refresh LaunchServices registration
-        refreshLaunchServices(appBundlePath: appBundlePath)
-        
-        // 3. Configure and activate services in pbs domain
-        enableServicesInPreferences()
-        
-        return true
-    }
-    
-    /// Backward-compatibility alias
-    @discardableResult
-    public func installQuickActions() throws -> Bool {
-        return try installServices()
-    }
-    
-    /// Removes any legacy UpackX Automator workflows from ~/Library/Services
+    /// Removes any legacy Automator workflows (.workflow) to prevent duplicate context menus
     public func cleanLegacyWorkflows() {
         let fm = FileManager.default
         guard fm.fileExists(atPath: servicesDirectory.path) else { return }
@@ -51,100 +35,57 @@ public final class FinderIntegrationManager {
         }
     }
     
-    private func refreshLaunchServices(appBundlePath: String) {
-        let lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-        guard FileManager.default.fileExists(atPath: lsregisterPath) else { return }
-        
-        // Unregister debug build if present to prevent double registration
-        let debugApp = FileManager.default.currentDirectoryPath + "/build/UpackX.app"
-        if FileManager.default.fileExists(atPath: debugApp) {
-            let pUnreg = Process()
-            pUnreg.executableURL = URL(fileURLWithPath: lsregisterPath)
-            pUnreg.arguments = ["-u", debugApp]
-            try? pUnreg.run()
-            pUnreg.waitUntilExit()
-        }
-        
-        // Register /Applications/UpackX.app
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: lsregisterPath)
-        p.arguments = ["-f", appBundlePath]
-        try? p.run()
-        p.waitUntilExit()
-    }
-    
-    private func enableServicesInPreferences() {
-        // Ensure services are explicitly enabled in pbs domain
-        let serviceKeys = [
-            "com.upackx.extractor - Giải nén nhanh với UpackX - quickExtractService",
-            "com.upackx.extractor - Giải nén… với UpackX - extractToService",
-            "com.upackx.extractor - Nén nhanh với UpackX - quickCompressService",
-            "com.upackx.extractor - Nén… với UpackX - compressToService"
-        ]
-        
-        let pbsConfig = """
-        {
-            "enabled_context_menu" = 1;
-            "enabled_services_menu" = 1;
-            "presentation_modes" = {
-                ContextMenu = 1;
-                FinderPreview = 1;
-                ServicesMenu = 1;
-            };
-        }
-        """
-        
-        for key in serviceKeys {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-            p.arguments = ["write", "pbs", "NSServicesStatus", "-dict-add", key, pbsConfig]
-            try? p.run()
-            p.waitUntilExit()
-        }
-        
-        // Flush and update pbs cache
-        let pFlush = Process()
-        pFlush.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/pbs")
-        pFlush.arguments = ["-flush"]
-        try? pFlush.run()
-        pFlush.waitUntilExit()
-        
-        let pUpdate = Process()
-        pUpdate.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/pbs")
-        pUpdate.arguments = ["-update"]
-        try? pUpdate.run()
-        pUpdate.waitUntilExit()
-    }
-    
-    /// Verifies if all 4 native Cocoa NSServices are currently configured in pbs
-    public func isServicesConfigured() -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        p.arguments = ["read", "pbs", "NSServicesStatus"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
-        do {
-            try p.run()
-            p.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else { return false }
-            return output.contains("quickExtractService") &&
-                   output.contains("extractToService") &&
-                   output.contains("quickCompressService") &&
-                   output.contains("compressToService")
-        } catch {
+    /// Checks whether all 4 NSServices are declared in the application's Info.plist
+    public func isServicesDeclaredInBundle() -> Bool {
+        guard let services = Bundle.main.infoDictionary?["NSServices"] as? [[String: Any]] else {
             return false
         }
+        let messages = services.compactMap { $0["NSMessage"] as? String }
+        return messages.contains("quickExtractService") &&
+               messages.contains("extractToService") &&
+               messages.contains("quickCompressService") &&
+               messages.contains("compressToService")
     }
     
-    /// Checks and repairs Finder Integration if broken
+    /// Refreshes macOS Services subsystem dynamically using Apple's official AppKit API
+    @discardableResult
+    public func refreshServices() -> Bool {
+        cleanLegacyWorkflows()
+        // Standard AppKit API notifying macOS that dynamic services have updated
+        NSUpdateDynamicServices()
+        return true
+    }
+    
+    /// Backward-compatibility aliases
+    @discardableResult
+    public func installServices() throws -> Bool {
+        return refreshServices()
+    }
+    
+    @discardableResult
+    public func installQuickActions() throws -> Bool {
+        return refreshServices()
+    }
+    
+    /// Verifies whether UpackX bundle is configured for Services
+    public func isServicesConfigured() -> Bool {
+        return isInstalledInApplications && isServicesDeclaredInBundle()
+    }
+    
+    /// Opens macOS System Settings directly to Keyboard Shortcuts -> Services
+    public static func openSystemSettingsKeyboardServices() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
+    /// Checks and refreshes Finder Integration
     public func verifyAndRepair() -> (isValid: Bool, message: String) {
-        do {
-            try installServices()
-            return (true, "Đã làm mới và kích hoạt Finder NSServices thành công.")
-        } catch {
-            return (false, "Lỗi kích hoạt Finder Integration: \(error.localizedDescription)")
+        refreshServices()
+        if isInstalledInApplications {
+            return (true, "Đã làm mới Finder Services thành công.")
+        } else {
+            return (false, "Ứng dụng chưa được đặt trong /Applications. Hãy kéo UpackX vào /Applications để tích hợp Finder hoạt động ổn định nhất.")
         }
     }
 }

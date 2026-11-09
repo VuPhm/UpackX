@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   publish-release:
-    name: Build & Publish Release
+    name: Build & Publish Release (macOS Universal 2)
     runs-on: macos-15-intel
     steps:
       - name: Checkout repository

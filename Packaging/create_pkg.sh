@@ -4,12 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-VERSION="${1:-1.3.1}"
+VERSION="${1:-$(defaults read "${PROJECT_DIR}/Resources/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.4.0")}"
 BUILD_APP="${PROJECT_DIR}/build/UpackX.app"
 DIST_DIR="${PROJECT_DIR}/dist"
-OUTPUT_PKG="${DIST_DIR}/UpackX-v${VERSION}-macOS-Intel.pkg"
+OUTPUT_PKG="${DIST_DIR}/UpackX-v${VERSION}-macOS-Universal.pkg"
 
-echo "=== Packaging UpackX Apple Installer PKG (v${VERSION}) ==="
+echo "=== Packaging UpackX Universal Apple Installer PKG (v${VERSION}) ==="
 
 if [ ! -d "${BUILD_APP}" ]; then
     echo "Error: ${BUILD_APP} does not exist. Run 'make build' first."

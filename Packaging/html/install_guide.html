@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UpackX — Hướng Dẫn Cài Đặt & Cấp Quyền / Installation & Trust Guide</title>
+<style>
+:root {
+    --bg-page: #f5f5f7;
+    --bg-card: #ffffff;
+    --text-primary: #1d1d1f;
+    --text-secondary: #6e6e73;
+    --accent: #0071e3;
+    --border: #d2d2d7;
+    --card-border: #e5e5ea;
+    --badge-bg: #e8f2ff;
+    --badge-text: #0066cc;
+    --warn-bg: #fffbeb;
+    --warn-border: #fef3c7;
+    --warn-text: #92400e;
+    --danger-bg: #fef2f2;
+    --danger-border: #fee2e2;
+    --danger-text: #991b1b;
+    --success-bg: #f0fdf4;
+    --success-border: #bbf7d0;
+    --success-text: #166534;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-page: #1c1c1e;
+        --bg-card: #2c2c2e;
+        --text-primary: #f5f5f7;
+        --text-secondary: #98989d;
+        --accent: #2997ff;
+        --border: #38383a;
+        --card-border: #3a3a3c;
+        --badge-bg: #1c324c;
+        --badge-text: #70baff;
+        --warn-bg: #3d2c00;
+        --warn-border: #5c4300;
+        --warn-text: #fbbf24;
+        --danger-bg: #3c1212;
+        --danger-border: #5c1b1b;
+        --danger-text: #fca5a5;
+        --success-bg: #13301c;
+        --success-border: #1e462a;
+        --success-text: #86efac;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+}
+
+.container {
+    max-width: 740px;
+    margin: 0 auto;
+}
+
+header {
+    text-align: center;
+    padding-bottom: 24px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+    letter-spacing: -0.02em;
+}
+
+.subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.lang-switch {
+    display: inline-flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.lang-btn {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.lang-btn.active {
+    background: var(--accent);
+    color: #ffffff;
+    border-color: var(--accent);
+}
+
+.card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-top: 0;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.step-item {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.step-item:last-child {
+    margin-bottom: 0;
+}
+
+.step-num {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.step-content {
+    flex: 1;
+}
+
+.step-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+
+.step-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.box {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.box-warn {
+    background-color: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-text);
+}
+
+.box-danger {
+    background-color: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: var(--danger-text);
+}
+
+.box-success {
+    background-color: var(--success-bg);
+    border: 1px solid var(--success-border);
+    color: var(--success-text);
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--badge-bg);
+    color: var(--badge-text);
+}
+
+code {
+    font-family: ui-monospace, Menlo, Monaco, monospace;
+    font-size: 12px;
+    padding: 2px 6px;
+    background-color: rgba(125, 125, 125, 0.15);
+    border-radius: 4px;
+}
+
+.divider {
+    border-top: 1px dashed var(--border);
+    margin: 28px 0;
+}
+
+footer {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding-top: 12px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+    <h1>UpackX v1.4.0</h1>
+    <div class="subtitle">Ứng dụng nén &amp; giải nén native siêu nhẹ cho macOS • Universal 2 (Apple Silicon &amp; Intel)</div>
+    <div class="lang-switch">
+        <a href="#vi" class="lang-btn active">Tiếng Việt</a>
+        <a href="#en" class="lang-btn">English</a>
+    </div>
+</header>
+
+<!-- ========================= TIẾNG VIỆT ========================= -->
+<section id="vi">
+    <div class="card">
+        <h2>🚀 Quy Trình Cài Đặt &amp; Mở Lần Đầu (macOS 14 Sonoma, macOS 15 Sequoia+)</h2>
+        <ul class="steps">
+            <li class="step-item">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                    <div class="step-title">Kéo UpackX vào thư mục Applications</div>
+                    <div class="step-desc">Kéo biểu tượng <strong>UpackX.app</strong> vào lối tắt <strong>Applications</strong> ngay trong cửa sổ cài đặt này.</div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                    <div class="step-title">Mở ứng dụng lần đầu</div>
+                    <div class="step-desc">Mở thư mục <strong>Applications</strong> (hoặc Launchpad) và nhấp đúp vào <strong>UpackX</strong> để mở.</div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">3</div>
+                <div class="step-content">
+                    <div class="step-title">Xác nhận Gatekeeper qua Cài đặt hệ thống (Privacy &amp; Security)</div>
+                    <div class="step-desc">
+                        Nếu macOS hiển thị hộp thoại thông báo <em>"Apple cannot check it for malicious software"</em> (hoặc <em>"Không thể mở vì Apple không thể kiểm tra phần mềm độc hại"</em>):
+                        <ol style="margin: 8px 0 0 18px; padding: 0;">
+                            <li>Nhấn <strong>Xong (Done)</strong> hoặc <strong>Hủy (Cancel)</strong> để đóng hộp thoại.</li>
+                            <li>Vào <strong>Cài đặt hệ thống (System Settings)</strong> → chọn <strong>Quyền riêng tư &amp; Bảo mật (Privacy &amp; Security)</strong>.</li>
+                            <li>Cuộn xuống mục <strong>Bảo mật (Security)</strong>, tìm dòng ghi chú về UpackX và nhấn nút <strong>Vẫn mở (Open Anyway)</strong>.</li>
+                            <li>Nhập mật khẩu máy Mac / Touch ID của bạn khi được yêu cầu, sau đó chọn <strong>Mở (Open)</strong> để tiếp tục.</li>
+                        </ol>
+                    </div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">4</div>
+                <div class="step-content">
+                    <div class="step-title">Xử lý nếu nút "Vẫn mở" (Open Anyway) chưa xuất hiện</div>
+                    <div class="step-desc">
+                        macOS chỉ hiển thị nút <em>Vẫn mở</em> sau khi bạn đã cố gắng mở ứng dụng ít nhất một lần. Nếu chưa thấy trong Cài đặt hệ thống, hãy quay lại thư mục <strong>Applications</strong>, nhấp đúp mở <strong>UpackX</strong> một lần nữa, sau đó kiểm tra lại mục Quyền riêng tư &amp; Bảo mật.
+                    </div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">5</div>
+                <div class="step-content">
+                    <div class="step-title">Sử dụng ngay từ Menu chuột phải của Finder</div>
+                    <div class="step-desc">
+                        Sau khi mở lần đầu, UpackX tự động đăng ký 4 tác vụ native trong Finder:
+                        <strong>Giải nén nhanh</strong>, <strong>Giải nén…</strong>, <strong>Nén nhanh</strong>, và <strong>Nén…</strong>.
+                    </div>
+                </div>
+            </li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>🛡️ Hướng Dẫn Nhận Biết Cảnh Báo Bảo Mật macOS</h2>
+        
+        <div class="box box-warn">
+            <strong>ℹ️ Cảnh báo Nhà phát triển chưa xác định (HOÀN TOÀN BÌNH THƯỜNG):</strong><br>
+            Nội dung: <em>"Apple cannot check it for malicious software"</em> hoặc <em>"Nhà phát triển chưa được xác minh"</em>.<br>
+            Đây là thông báo mặc định của macOS khi chạy ứng dụng mã nguồn mở tự do chưa tham gia chương trình thu phí chứng chỉ Apple Developer ($99/năm). Bạn chỉ cần thực hiện cấp quyền theo Bước 3 ở trên.
+        </div>
+
+        <div class="box box-danger" style="margin-top: 12px;">
+            <strong>⛔ Cảnh báo ỨNG DỤNG HỎNG hoặc ĐỘC HẠI (TUYỆT ĐỐI KHÔNG CẤP QUYỀN):</strong><br>
+            Nội dung: <em>"UpackX is damaged and can't be opened"</em> (Ứng dụng bị hỏng) hoặc <em>"App will damage your computer"</em> (Ứng dụng sẽ gây hại cho máy tính).<br>
+            Cảnh báo này có nghĩa file cài đặt đã bị lỗi trong quá trình tải xuống hoặc đã bị sửa đổi trái phép. <strong>KHÔNG</strong> tìm cách vượt qua cảnh báo này! Hãy xóa file và tải lại trực tiếp từ trang phát hành chính thức: <a href="https://github.com/VuPhm/UpackX/releases" style="color: inherit; font-weight: 600;">github.com/VuPhm/UpackX/releases</a>.
+        </div>
+
+        <div class="box box-success" style="margin-top: 12px;">
+            <strong>🔒 Cam kết An toàn &amp; Bảo mật của UpackX:</strong><br>
+            • Không yêu cầu gõ lệnh Terminal hay tắt Gatekeeper.<br>
+            • Không yêu cầu quyền quản trị viên (root / sudo).<br>
+            • 100% Native Swift &amp; AppKit, không daemon chạy ngầm, mã nguồn mở minh bạch.
+        </div>
+    </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ========================= ENGLISH ========================= -->
+<section id="en">
+    <div class="card">
+        <h2>🚀 Installation &amp; First-Launch Trust Guide (macOS 14 Sonoma, macOS 15+)</h2>
+        <ul class="steps">
+            <li class="step-item">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                    <div class="step-title">Drag UpackX to Applications</div>
+                    <div class="step-desc">Drag the <strong>UpackX.app</strong> icon to the <strong>Applications</strong> shortcut in this installer window.</div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                    <div class="step-title">Open the app for the first time</div>
+                    <div class="step-desc">Navigate to your <strong>Applications</strong> folder (or Launchpad) and double-click <strong>UpackX</strong>.</div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">3</div>
+                <div class="step-content">
+                    <div class="step-title">Grant Trust in System Settings (Privacy &amp; Security)</div>
+                    <div class="step-desc">
+                        If macOS displays <em>"Apple cannot check it for malicious software"</em>:
+                        <ol style="margin: 8px 0 0 18px; padding: 0;">
+                            <li>Click <strong>Done</strong> or <strong>Cancel</strong> to close the prompt.</li>
+                            <li>Open <strong>System Settings</strong> → select <strong>Privacy &amp; Security</strong>.</li>
+                            <li>Scroll down to the <strong>Security</strong> section, locate the notice regarding UpackX, and click <strong>Open Anyway</strong>.</li>
+                            <li>Enter your Mac password or use Touch ID, then click <strong>Open</strong> to confirm.</li>
+                        </ol>
+                    </div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">4</div>
+                <div class="step-content">
+                    <div class="step-title">What if "Open Anyway" does not appear?</div>
+                    <div class="step-desc">
+                        macOS only displays the "Open Anyway" button after an attempt to open the app has been made. If it does not appear, double-click <strong>UpackX</strong> in <code>/Applications</code> once more, then return to Privacy &amp; Security.
+                    </div>
+                </div>
+            </li>
+            <li class="step-item">
+                <div class="step-num">5</div>
+                <div class="step-content">
+                    <div class="step-title">Ready for Right-Click Finder Actions</div>
+                    <div class="step-desc">
+                        Once trusted, UpackX automatically enables 4 native Finder Services:
+                        <strong>Quick Extract</strong>, <strong>Extract…</strong>, <strong>Quick Compress</strong>, and <strong>Compress…</strong>.
+                    </div>
+                </div>
+            </li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>🛡️ Distinguishing Security Warnings</h2>
+        
+        <div class="box box-warn">
+            <strong>ℹ️ Unidentified Developer Notice (EXPECTED &amp; SAFE):</strong><br>
+            Message: <em>"Apple cannot check it for malicious software"</em> or <em>"Unidentified developer"</em>.<br>
+            This is standard macOS Gatekeeper behavior for independent open-source software distributed outside the paid Apple Developer program. Follow Step 3 above to authorize launch.
+        </div>
+
+        <div class="box box-danger" style="margin-top: 12px;">
+            <strong>⛔ Damaged or Malicious Warning (DO NOT BYPASS):</strong><br>
+            Message: <em>"UpackX is damaged and can't be opened"</em> or <em>"App will damage your computer"</em>.<br>
+            This indicates the download was truncated or the package was altered. <strong>DO NOT</strong> bypass this warning. Delete the app and re-download directly from official releases: <a href="https://github.com/VuPhm/UpackX/releases" style="color: inherit; font-weight: 600;">github.com/VuPhm/UpackX/releases</a>.
+        </div>
+
+        <div class="box box-success" style="margin-top: 12px;">
+            <strong>🔒 Security Assurance:</strong><br>
+            • No Terminal commands or Gatekeeper disabling required.<br>
+            • No administrator/root privileges required.<br>
+            • 100% native Swift &amp; AppKit, zero background daemons, transparent open source.
+        </div>
+    </div>
+</section>
+
+<footer>
+    UpackX is an open-source project. Official Repository: <a href="https://github.com/VuPhm/UpackX" style="color: var(--accent);">github.com/VuPhm/UpackX</a>
+</footer>
+
+</div>
+</body>
+</html>

@@ -13,9 +13,9 @@ echo ""
 echo "[Step 1/4] Running Clean Uninstall..."
 "${PROJECT_DIR}/Scripts/uninstall.sh"
 
-# 2. Build Release x86_64
+# 2. Build Release Universal 2
 echo ""
-echo "[Step 2/4] Building Release x86_64..."
+echo "[Step 2/4] Building Release Universal 2 (Apple Silicon & Intel)..."
 "${PROJECT_DIR}/Scripts/build.sh"
 
 # 3. Clean Install to /Applications

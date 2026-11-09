@@ -21,6 +21,8 @@ public struct GitHubReleaseResponse: Codable {
     public let body: String?
     public let htmlURL: String
     public let publishedAt: String?
+    public let prerelease: Bool?
+    public let draft: Bool?
     public let assets: [GitHubAsset]?
     
     enum CodingKeys: String, CodingKey {
@@ -29,6 +31,8 @@ public struct GitHubReleaseResponse: Codable {
         case body
         case htmlURL = "html_url"
         case publishedAt = "published_at"
+        case prerelease
+        case draft
         case assets
     }
 }
@@ -55,6 +59,7 @@ public final class UpdateManager {
     
     public static let repoOwner = "VuPhm"
     public static let repoName = "UpackX"
+    public static let releasesEndpoint = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases"
     public static let latestReleaseEndpoint = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest"
     
     private let lastCheckKey = "UpackX_LastUpdateCheckTimestamp"
@@ -67,7 +72,7 @@ public final class UpdateManager {
         if let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String, !ver.isEmpty {
             return ver
         }
-        return "1.3.1"
+        return "1.4.0"
     }
     
     public var isAutoCheckEnabled: Bool {
@@ -93,22 +98,72 @@ public final class UpdateManager {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
     }
     
+    /// Scores an asset according to format and target machine architecture
+    public static func scoreAsset(name: String) -> Int {
+        let lower = name.lowercased()
+        var score = 0
+        
+        // Format preference: DMG (primary) > PKG (secondary) > ZIP (portable)
+        if lower.hasSuffix(".dmg") {
+            score += 100
+        } else if lower.hasSuffix(".pkg") {
+            score += 60
+        } else if lower.hasSuffix(".zip") {
+            score += 30
+        } else {
+            return -100 // Exclude non-app artifacts (e.g. tar.gz, sums, etc.)
+        }
+        
+        #if arch(arm64)
+        let isArm64 = true
+        #else
+        let isArm64 = false
+        #endif
+        
+        if lower.contains("universal") {
+            score += 40
+        } else if isArm64 {
+            if lower.contains("arm64") || lower.contains("applesilicon") {
+                score += 50
+            } else if lower.contains("intel") || lower.contains("x86_64") {
+                score -= 80
+            }
+        } else {
+            // Intel x86_64
+            if lower.contains("intel") || lower.contains("x86_64") {
+                score += 50
+            } else if lower.contains("arm64") || lower.contains("applesilicon") {
+                score -= 80
+            }
+        }
+        
+        return score
+    }
+    
     /// Checks for updates against GitHub Releases
     public func checkForUpdates(
         customEndpoint: String? = nil,
         completion: @escaping (UpdateCheckResult) -> Void
     ) {
-        let endpointStr = customEndpoint ?? Self.latestReleaseEndpoint
+        let endpointStr = customEndpoint ?? Self.releasesEndpoint
         guard let url = URL(string: endpointStr) else {
             completion(.error("URL kiểm tra cập nhật không hợp lệ."))
             return
         }
         
+        #if arch(arm64)
+        let archDesc = "arm64 Apple Silicon"
+        #elseif arch(x86_64)
+        let archDesc = "x86_64 Intel"
+        #else
+        let archDesc = "Universal"
+        #endif
+        
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 15.0
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("UpackX/\(currentVersionString) (Macintosh; Intel macOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("UpackX/\(currentVersionString) (Macintosh; \(archDesc) macOS)", forHTTPHeaderField: "User-Agent")
         
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
@@ -139,25 +194,44 @@ public final class UpdateManager {
             }
             
             do {
-                let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
-                self.recordCheckTime()
-                
-                guard let remoteVer = SemVer(string: release.tagName) else {
-                    DispatchQueue.main.async {
-                        completion(.error("Định dạng phiên bản '\(release.tagName)' không hợp lệ theo chuẩn SemVer."))
-                    }
-                    return
+                // Decode either a list of releases (standard /releases) or a single release object (for test mock /latest)
+                var releases: [GitHubReleaseResponse] = []
+                if let list = try? JSONDecoder().decode([GitHubReleaseResponse].self, from: data) {
+                    releases = list
+                } else if let single = try? JSONDecoder().decode(GitHubReleaseResponse.self, from: data) {
+                    releases = [single]
+                } else {
+                    throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "Unexpected response structure"))
                 }
                 
-                let currentVer = SemVer(string: self.currentVersionString) ?? SemVer(string: "1.0.0")!
+                self.recordCheckTime()
                 
-                if remoteVer > currentVer {
-                    // Find preferred macOS package (.dmg > .pkg > .zip)
+                let currentVer = SemVer(string: self.currentVersionString) ?? SemVer(string: "1.4.0")!
+                let isCurrentPrerelease = currentVer.prerelease != nil
+                
+                // Filter valid releases: ignore drafts, include prereleases if current is prerelease or explicitly tagged
+                let candidateReleases = releases.filter { r in
+                    guard r.draft != true else { return false }
+                    guard let sem = SemVer(string: r.tagName) else { return false }
+                    if !isCurrentPrerelease && (r.prerelease == true || sem.prerelease != nil) {
+                        return false
+                    }
+                    return sem > currentVer
+                }
+                
+                // Pick highest valid release
+                let targetRelease = candidateReleases.max { a, b in
+                    guard let va = SemVer(string: a.tagName), let vb = SemVer(string: b.tagName) else { return false }
+                    return va < vb
+                }
+                
+                if let release = targetRelease, let remoteVer = SemVer(string: release.tagName) {
+                    // Find preferred macOS package matching architecture (DMG > PKG > ZIP)
                     var preferredAsset: GitHubAsset? = nil
                     if let assets = release.assets {
-                        preferredAsset = assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") })
-                            ?? assets.first(where: { $0.name.lowercased().hasSuffix(".pkg") })
-                            ?? assets.first(where: { $0.name.lowercased().hasSuffix(".zip") })
+                        preferredAsset = assets
+                            .filter { Self.scoreAsset(name: $0.name) > 0 }
+                            .max { Self.scoreAsset(name: $0.name) < Self.scoreAsset(name: $1.name) }
                     }
                     
                     let downloadURL: URL?
