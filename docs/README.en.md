@@ -90,3 +90,4 @@ Right-click any file or folder in Finder to access 4 dedicated native UpackX act
 - **Processor:** Apple Silicon (`arm64`) or Intel (`x86_64`).
 - **Operating System:** macOS 14.0 Sonoma or newer (tested on Sonoma 14 and Sequoia 15).
 - **Homebrew / External Dependencies:** None.
+
