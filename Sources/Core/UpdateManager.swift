@@ -72,7 +72,7 @@ public final class UpdateManager {
         if let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String, !ver.isEmpty {
             return ver
         }
-        return "1.4.0"
+        return "1.4.1"
     }
     
     public var isAutoCheckEnabled: Bool {
@@ -206,7 +206,7 @@ public final class UpdateManager {
                 
                 self.recordCheckTime()
                 
-                let currentVer = SemVer(string: self.currentVersionString) ?? SemVer(string: "1.4.0")!
+                let currentVer = SemVer(string: self.currentVersionString) ?? SemVer(string: "1.4.1")!
                 let isCurrentPrerelease = currentVer.prerelease != nil
                 
                 // Filter valid releases: ignore drafts, include prereleases if current is prerelease or explicitly tagged

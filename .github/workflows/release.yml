@@ -34,12 +34,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: UpackX v1.4.1 Beta
+          body_path: Packaging/release_notes_v1.4.1.md
           files: |
             dist/*.dmg
             dist/*.pkg
             dist/*.zip
             dist/SHA256SUMS.txt
-          generate_release_notes: true
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -45,15 +45,15 @@ if [ -f "${MAIN_BIN}" ]; then
     # Host execution test
     HOST_ARCH=$(uname -m)
     if [ "${HOST_ARCH}" = "x86_64" ]; then
-        if "${MAIN_BIN}" --version | grep -q "1.4.0"; then
-            check_pass "Host execution (x86_64 slice): runs cleanly, reports v1.4.0"
+        if "${MAIN_BIN}" --version | grep -q "${VERSION}"; then
+            check_pass "Host execution (x86_64 slice): runs cleanly, reports v${VERSION}"
         else
             check_fail "Host execution" "Main binary failed to execute --version"
         fi
         check_note "arm64 slice verified via lipo/file/linkage. Host is x86_64; physical arm64 execution: NOT VERIFIED on host"
     elif [ "${HOST_ARCH}" = "arm64" ]; then
-        if "${MAIN_BIN}" --version | grep -q "1.4.0"; then
-            check_pass "Host execution (arm64 slice): runs cleanly, reports v1.4.0"
+        if "${MAIN_BIN}" --version | grep -q "${VERSION}"; then
+            check_pass "Host execution (arm64 slice): runs cleanly, reports v${VERSION}"
         else
             check_fail "Host execution" "Main binary failed to execute --version"
         fi

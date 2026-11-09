@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-11-09
+
+### Chuẩn hóa & Nâng cấp (Release Readiness & Vietnamese-First)
+- **Tài liệu ưu tiên tiếng Việt (Vietnamese-First Documentation):**
+  - Viết lại toàn bộ `README.md` sang tiếng Việt làm ngôn ngữ chính, tối ưu cho người dùng phổ thông. Đưa phần tải về, cài đặt và cấp quyền lên đầu trang.
+  - Tách tài liệu tiếng Anh sang `docs/README.en.md`.
+  - Hướng dẫn cài đặt HTML nhúng trong DMG hiển thị tiếng Việt mặc định, hỗ trợ tiếng Anh tùy chọn.
+  - Loại bỏ các tuyên bố tự nhận open-source hoặc Apple verified/notarized không phù hợp.
+- **Phát hành bản v1.4.1 Beta:**
+  - Đồng bộ số hiệu phiên bản `1.4.1` (build 7) trên toàn bộ `Info.plist`, `Distribution.xml`, script đóng gói, QA check và CI/CD.
+  - Đóng gói bản cài đặt chính `UpackX-v1.4.1-macOS-Universal.dmg` cùng các bản phụ PKG và ZIP.
+  - Tích hợp ghi chú phát hành song hành hỗ trợ kiểm thử thực tế.
+
 ## [1.4.0] - 2026-11-09
 
 ### Added
