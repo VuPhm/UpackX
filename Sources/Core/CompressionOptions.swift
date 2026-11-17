@@ -86,19 +86,22 @@ public struct CompressionResult {
     public let totalBytesProcessed: Int64
     public let archiveSize: Int64
     public let elapsedTime: TimeInterval
+    public let wasSkipped: Bool
     
     public init(
         destinationURL: URL,
         totalItemsCompressed: Int,
         totalBytesProcessed: Int64,
         archiveSize: Int64,
-        elapsedTime: TimeInterval
+        elapsedTime: TimeInterval,
+        wasSkipped: Bool = false
     ) {
         self.destinationURL = destinationURL
         self.totalItemsCompressed = totalItemsCompressed
         self.totalBytesProcessed = totalBytesProcessed
         self.archiveSize = archiveSize
         self.elapsedTime = elapsedTime
+        self.wasSkipped = wasSkipped
     }
 }
 

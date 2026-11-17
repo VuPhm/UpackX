@@ -1,6 +1,6 @@
 import AppKit
 
-let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.4.1"
+let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.4.2"
 
 #if arch(arm64)
 let runtimeArch = "arm64 Apple Silicon"

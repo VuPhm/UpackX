@@ -1,6 +1,6 @@
 # UpackX — Lightweight Native Archive Extractor & Compressor for macOS
 
-[![Release](https://img.shields.io/badge/release-v1.4.1--beta-blue.svg)](https://github.com/VuPhm/UpackX/releases)
+[![Release](https://img.shields.io/badge/release-v1.4.2--beta-blue.svg)](https://github.com/VuPhm/UpackX/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B%20%7C%20Universal%202-brightgreen.svg)]()
 [![Architecture](https://img.shields.io/badge/arch-Apple%20Silicon%20%7C%20Intel-orange.svg)]()
 [![License](https://img.shields.io/badge/license-Proprietary%20%2F%20BSD%20Notices-lightgrey.svg)](../THIRD_PARTY_NOTICES.md)
@@ -35,16 +35,16 @@
 
 Pre-built Universal 2 release packages are available on the [GitHub Releases page](https://github.com/VuPhm/UpackX/releases):
 
-- **Apple Disk Image (Recommended):** `UpackX-v1.4.1-macOS-Universal.dmg`
-- **Apple Installer Package:** `UpackX-v1.4.1-macOS-Universal.pkg`
-- **Portable ZIP Bundle:** `UpackX-v1.4.1-macOS-Universal.zip`
+- **Apple Disk Image (Recommended):** `UpackX-v1.4.2-macOS-Universal.dmg`
+- **Apple Installer Package:** `UpackX-v1.4.2-macOS-Universal.pkg`
+- **Portable ZIP Bundle:** `UpackX-v1.4.2-macOS-Universal.zip`
 - **Authoritative Checksums:** `SHA256SUMS.txt`
 
 #### First-Launch Trust Guide (Gatekeeper)
 
 As independent macOS software distributed outside the paid Apple Developer program, UpackX is ad-hoc signed and protected by macOS Gatekeeper:
 
-1. **Install:** Double-click `UpackX-v1.4.1-macOS-Universal.dmg` and drag `UpackX.app` into `/Applications`.
+1. **Install:** Double-click `UpackX-v1.4.2-macOS-Universal.dmg` and drag `UpackX.app` into `/Applications`.
 2. **First Open:** Open `/Applications` and double-click `UpackX`.
 3. **Authorize in System Settings:**
    - When macOS displays *"Apple cannot check it for malicious software"*, click **Done** or **Cancel**.

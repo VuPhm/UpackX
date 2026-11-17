@@ -93,12 +93,14 @@ public final class ZipCompressor {
                 case .rename:
                     finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
                 case .skip:
+                    let existingSize = (try? fm.attributesOfItem(atPath: finalDestinationURL.path)[.size] as? Int64) ?? 0
                     let result = CompressionResult(
                         destinationURL: finalDestinationURL,
                         totalItemsCompressed: 0,
                         totalBytesProcessed: 0,
-                        archiveSize: 0,
-                        elapsedTime: 0
+                        archiveSize: existingSize,
+                        elapsedTime: 0,
+                        wasSkipped: true
                     )
                     completion(.success(result))
                     return true
@@ -150,15 +152,18 @@ public final class ZipCompressor {
                 return false
             }
             
-            // If source is a symlink to a directory, check if user selected a directory symlink directly
+            // If source is a symlink to a directory, traverse it when selected directly as a top-level source
             var treatAsDirectory = isSourceDir.boolValue
             if isSourceSymlink {
-                // For a top-level symlink selected directly as a source:
-                // Only treat as directory if it's a real directory, otherwise archive the symlink or check readability
-                treatAsDirectory = false
+                var targetIsDir: ObjCBool = false
+                if fm.fileExists(atPath: source.path, isDirectory: &targetIsDir) && targetIsDir.boolValue {
+                    treatAsDirectory = true
+                } else {
+                    treatAsDirectory = false
+                }
             }
             
-            if !isSourceSymlink {
+            if !isSourceSymlink || treatAsDirectory {
                 guard fm.isReadableFile(atPath: source.path) else {
                     completion(.failure(.permissionDenied(source.path)))
                     return false
@@ -670,11 +675,12 @@ public final class ZipCompressor {
             posixPermissions: dirPerm
         ))
         
-        // 2. Enumerate directory contents with strict error propagation
+        // 2. Enumerate directory contents with strict error propagation (using resolved root URL so top-level symlinks to directories work)
         var traversalError: Error? = nil
+        let enumerableDirURL = URL(fileURLWithPath: canonicalDirPath, isDirectory: true)
         
         guard let enumerator = fm.enumerator(
-            at: directoryURL,
+            at: enumerableDirURL,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
             options: [],
             errorHandler: { url, error in

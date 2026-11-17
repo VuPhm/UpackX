@@ -1,6 +1,6 @@
 # UpackX — Ứng dụng nén & giải nén native siêu nhẹ cho macOS
 
-[![Release](https://img.shields.io/badge/release-v1.4.1--beta-blue.svg)](https://github.com/VuPhm/UpackX/releases)
+[![Release](https://img.shields.io/badge/release-v1.4.2--beta-blue.svg)](https://github.com/VuPhm/UpackX/releases)
 [![Platform](https://img.shields.io/badge/nền_tảng-macOS%2014.0%2B%20%7C%20Universal%202-brightgreen.svg)]()
 [![Architecture](https://img.shields.io/badge/kiến_trúc-Apple%20Silicon%20%7C%20Intel-orange.svg)]()
 [![License](https://img.shields.io/badge/giấy_phép-Proprietary%20%2F%20BSD%20Notices-lightgrey.svg)](THIRD_PARTY_NOTICES.md)
@@ -17,13 +17,13 @@ Bản phát hành chính thức được đóng gói sẵn tại trang [GitHub R
 
 | Tệp cài đặt | Định dạng | Mô tả |
 |---|---|---|
-| **[`UpackX-v1.4.1-macOS-Universal.dmg`](https://github.com/VuPhm/UpackX/releases/download/v1.4.1/UpackX-v1.4.1-macOS-Universal.dmg)** | **Apple Disk Image** | **Khuyên dùng:** Kéo thả vào Applications, có kèm sẵn hướng dẫn cài đặt HTML. |
-| **`UpackX-v1.4.1-macOS-Universal.pkg`** | Apple Installer | Bộ cài đặt có giao diện hướng dẫn từng bước. |
-| **`UpackX-v1.4.1-macOS-Universal.zip`** | Portable ZIP | Bản chạy trực tiếp không cần mount đĩa. |
+| **[`UpackX-v1.4.2-macOS-Universal.dmg`](https://github.com/VuPhm/UpackX/releases/download/v1.4.2/UpackX-v1.4.2-macOS-Universal.dmg)** | **Apple Disk Image** | **Khuyên dùng:** Kéo thả vào Applications, có kèm sẵn hướng dẫn cài đặt HTML. |
+| **`UpackX-v1.4.2-macOS-Universal.pkg`** | Apple Installer | Bộ cài đặt có giao diện hướng dẫn từng bước. |
+| **`UpackX-v1.4.2-macOS-Universal.zip`** | Portable ZIP | Bản chạy trực tiếp không cần mount đĩa. |
 | **`SHA256SUMS.txt`** | Text | Mã băm kiểm tra tính toàn vẹn của tệp cài đặt. |
 
 ### Các bước cài đặt:
-1. Tải tệp **`UpackX-v1.4.1-macOS-Universal.dmg`**.
+1. Tải tệp **`UpackX-v1.4.2-macOS-Universal.dmg`**.
 2. Nhấp đúp mở file `.dmg`, kéo biểu tượng **`UpackX.app`** vào lối tắt thư mục **`Applications`**.
 3. Vào `Applications` và mở `UpackX` lần đầu tiên.
 
@@ -116,7 +116,7 @@ Sau khi mở lần đầu thành công, UpackX tự động đăng ký **4 tác 
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    BẢNG THÔNG SỐ KỸ THUẬT UPACKX v1.4.1                     │
+│                    BẢNG THÔNG SỐ KỸ THUẬT UPACKX v1.4.2                     │
 ├────────────────────────────────┬────────────────────────────────────────────┤
 │ Kiến trúc nhị phân             │ Universal 2 (Chạy native Apple Silicon &   │
 │                                │ Intel x86_64, không cần Rosetta)           │

@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — Hotfix: Path Resolution & Archive Structure
+## [1.4.2] - 2026-11-17
 
-### Đã sửa & Gia cố (Fixed & Hardened)
+### Đã sửa & Gia cố (Path Resolution & Archive Structure Fix)
 - **Chuẩn hóa cơ chế xử lý đường dẫn thống nhất (`PathSecurity`):**
   - Xử lý nhất quán đường dẫn mặc định, đường dẫn nhập tay, chọn qua `NSOpenPanel`, kéo thả thư mục và dán từ Clipboard (`Cmd+V` thư mục từ Finder, đường dẫn có dấu nháy `"..."`/`'...'`, `~`, `file://`, dấu `/` cuối, khoảng trắng thoát `\ ` và Unicode tiếng Việt).
   - Loại bỏ hoàn toàn việc rơi ngầm về `currentDirectoryPath` (CWD) khi trường đường dẫn rỗng hoặc nhập đường dẫn tương đối không rõ gốc trong giao diện.
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Giữ nguyên dấu chấm, khoảng trắng và Unicode trong tên thư mục khi đặt tên file nén mặc định (ví dụ: thư mục `Project v1.4.1` tạo `Project v1.4.1.zip` thay vì bị cắt thành `Project v1.4.zip`).
   - Kiểm tra nghiêm ngặt tên file nén nhập tay: chặn ký tự phân cấp thư mục (`/`, `\`, `:`), tự động thu gọn đuôi lặp `.zip.zip`.
   - Quét danh sách nguồn trước khi tạo thư mục đích mới để ngăn lỗi self-inclusion ngay cả khi lưu file ZIP vào một thư mục con mới bên trong chính thư mục nguồn.
+  - Phản ánh chính xác trạng thái khi chính sách trùng lặp (conflict policy) là **Bỏ qua (Skip)**: bổ sung `CompressionResult.wasSkipped`, hiển thị đúng thông báo `"Đã bỏ qua nén file"` / `"Đã bỏ qua giải nén"` và log CLI rõ ràng thay vì báo thành công giả như vừa tạo archive mới.
 - **Tăng cường an toàn dữ liệu, Symlink & Multi-archive (`MultipartDetector`, `GoogleDriveHelper`):**
   - Kiểm tra canonical containment theo ranh giới path component và kiểm tra `lstat` trên từng cấp thư mục trung gian để chặn tấn công Zip-Slip qua symlink (`symlink -> /tmp` kèm entry con) hoặc symlink tồn tại sẵn tại đích.
   - Không bao giờ xóa thư mục chứa dữ liệu của người dùng khi xảy ra xung đột tên với file giải nén hoặc file ZIP đầu ra.

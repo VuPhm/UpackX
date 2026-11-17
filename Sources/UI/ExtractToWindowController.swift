@@ -357,6 +357,27 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         confirmCallback?(options)
         window?.close()
     }
+    
+    public var currentDestinationPath: String {
+        return pathTextField.stringValue
+    }
+    
+    public var isEnclosingFolderEnabled: Bool {
+        return enclosingFolderCheckbox.state == .on
+    }
+    
+    public func confirmForTesting(destinationPath: String, createEnclosingFolder: Bool = false, conflictStrategy: ConflictStrategy = .ask) throws {
+        window?.endEditing(for: nil)
+        pathTextField.stringValue = destinationPath
+        enclosingFolderCheckbox.state = createEnclosingFolder ? .on : .off
+        if let idx = ConflictStrategy.allCases.firstIndex(of: conflictStrategy) {
+            conflictPopUp.selectItem(at: idx)
+        }
+        let targetURL = try PathSecurity.resolveDestinationDirectoryURL(destinationPath, baseDirectory: nil)
+        try FileManager.default.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+        self.selectedDestinationURL = targetURL
+        executeProceed()
+    }
 }
 
 // MARK: - DestinationPathTextField & DestinationPathFieldEditor (Safe Folder Drag & Paste)

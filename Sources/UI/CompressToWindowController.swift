@@ -19,7 +19,7 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
     private let infoLabel = NSTextField(labelWithString: "Đang tính toán dung lượng nguồn...")
     
     public init(sources: [URL]) {
-        let normalizedSources = sources.map { PathSecurity.normalizeFileURL($0) }
+        let normalizedSources = PathSecurity.deduplicateURLs(sources)
         self.sources = normalizedSources
         self.selectedDestinationDirectory = PathSecurity.defaultCompressionDirectory(for: normalizedSources)
         self.validatedArchiveFileName = PathSecurity.defaultArchiveFileName(for: normalizedSources)
@@ -411,5 +411,31 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         window?.orderOut(nil)
         confirmCallback?(destinationURL, selectedLevel)
         window?.close()
+    }
+    
+    public var currentDestinationPath: String {
+        return pathTextField.stringValue
+    }
+    
+    public var currentArchiveFileName: String {
+        return nameTextField.stringValue
+    }
+    
+    public func confirmForTesting(destinationDirectoryPath: String, archiveFileName: String? = nil, level: CompressionLevel = .normal) throws {
+        window?.endEditing(for: nil)
+        if let name = archiveFileName {
+            nameTextField.stringValue = name
+        }
+        pathTextField.stringValue = destinationDirectoryPath
+        if let idx = CompressionLevel.allCases.firstIndex(of: level) {
+            levelPopUp.selectItem(at: idx)
+        }
+        let normalizedName = try PathSecurity.validateAndNormalizeArchiveFileName(nameTextField.stringValue)
+        nameTextField.stringValue = normalizedName
+        self.validatedArchiveFileName = normalizedName
+        let targetDirURL = try PathSecurity.resolveDestinationDirectoryURL(destinationDirectoryPath, baseDirectory: nil)
+        try FileManager.default.createDirectory(at: targetDirURL, withIntermediateDirectories: true, attributes: nil)
+        self.selectedDestinationDirectory = targetDirURL
+        executeProceed()
     }
 }

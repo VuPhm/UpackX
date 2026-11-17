@@ -24,6 +24,7 @@ trap cleanup_test_suite EXIT
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 
 pass() {
     echo -e "  \033[32m✔ PASS:\033[0m $1"
@@ -34,6 +35,16 @@ fail() {
     echo -e "  \033[31m✘ FAIL:\033[0m $1 - $2"
     FAILED=$((FAILED + 1))
 }
+
+skip() {
+    echo -e "  \033[33m↷ SKIP:\033[0m $1 - $2"
+    SKIPPED=$((SKIPPED + 1))
+}
+
+SEVEN_Z_BIN="${PROJECT_DIR}/build/UpackX.app/Contents/Resources/bin/7zz"
+if [ ! -x "${SEVEN_Z_BIN}" ] && command -v 7zz >/dev/null; then
+    SEVEN_Z_BIN="$(command -v 7zz)"
+fi
 
 echo "========================================================"
 echo "    UpackX Quality & Compliance Verification Test Suite"
@@ -53,11 +64,15 @@ echo "Simple content" > "${SRC_1}/hello.txt"
 # Create archives
 (cd "${SRC_1}" && zip -r "${TEST_DIR}/test_small.zip" .) >/dev/null
 (cd "${SRC_1}" && tar -czf "${TEST_DIR}/test_small.tar.gz" .) >/dev/null
-if command -v 7zz >/dev/null; then
-    (cd "${SRC_1}" && 7zz a "${TEST_DIR}/test_small.7z" .) >/dev/null
-fi
+(cd "${SRC_1}" && "${SEVEN_Z_BIN}" a "${TEST_DIR}/test_small.7z" .) >/dev/null
 if command -v rar >/dev/null; then
-    (cd "${SRC_1}" && rar a -idq "${TEST_DIR}/test_small.rar" .) >/dev/null
+    (cd "${SRC_1}" && rar a -r -idq "${TEST_DIR}/test_small.rar" "Thư mục cấp 1" "hello.txt") >/dev/null
+else
+    # Fallback to deterministic, checksum-verified RAR5 fixture containing identical Unicode files & hierarchy
+    base64 -D > "${TEST_DIR}/test_small.rar" << 'EOF_RAR_T1'
+UmFyIRoHAQDz4YLrCwEFBwAGAQGAgIAAq8QvUW8CAp0ABp0ApIMCiVb8aiP+x+WAAAFZVGjGsCBt4bulYyBj4bqlcCAxL1RoxrAgbeG7pWMgY29uL1Rp4bq/bmcgVmnhu4d0IGPDsyBk4bqldSAtIMSQ4buTIMOhbiB04buRdCBuZ2hp4buHcC50eHRYaW4gY2jDoG8gQUdZIC0gVXBhY2tYIDIwMjYhCkq69sEfAgKPAAaPAKSDAolW/Gr/iNkQgAABCWhlbGxvLnR4dFNpbXBsZSBjb250ZW50CiC/fDcxAgIAAwDtgwGJVvxqgAABIVRoxrAgbeG7pWMgY+G6pXAgMS9UaMawIG3hu6VjIGNvbhoDu5wiAgIAAwDtgwGJVvxqgAABElRoxrAgbeG7pWMgY+G6pXAgMR13VlEDBQQA
+EOF_RAR_T1
+    echo "f78c5828a797adc279081c67e05478706c8581802a0032855fe188a2070510a6  ${TEST_DIR}/test_small.rar" | shasum -a 256 -c - >/dev/null
 fi
 
 # Test ZIP
@@ -81,26 +96,22 @@ else
     fail "TAR.GZ Extraction" "Files not found at expected destination"
 fi
 
-# Test 7Z if generated
-if [ -f "${TEST_DIR}/test_small.7z" ]; then
-    "${BUILD_BIN}" --quick "${TEST_DIR}/test_small.7z" >/dev/null 2>&1 || true
-    if [ -f "${TEST_DIR}/hello.txt" ]; then
-        pass "Quick Extract 7Z successfully"
-        rm -rf "${TEST_DIR}/hello.txt" "${TEST_DIR}/Thư mục cấp 1"
-    else
-        fail "7Z Extraction" "Files not found"
-    fi
+# Test 7Z (always executed)
+"${BUILD_BIN}" --quick "${TEST_DIR}/test_small.7z" >/dev/null 2>&1 || true
+if [ -f "${TEST_DIR}/hello.txt" ] && [ -f "${TEST_DIR}/Thư mục cấp 1/Thư mục con/Tiếng Việt có dấu - Đồ án tốt nghiệp.txt" ]; then
+    pass "Quick Extract 7Z with Vietnamese Unicode file names & hierarchy preserved"
+    rm -rf "${TEST_DIR}/hello.txt" "${TEST_DIR}/Thư mục cấp 1"
+else
+    fail "7Z Extraction" "Files not found"
 fi
 
-# Test RAR if generated
-if [ -f "${TEST_DIR}/test_small.rar" ]; then
-    "${BUILD_BIN}" --quick "${TEST_DIR}/test_small.rar" >/dev/null 2>&1 || true
-    if [ -f "${TEST_DIR}/hello.txt" ]; then
-        pass "Quick Extract RAR successfully"
-        rm -rf "${TEST_DIR}/hello.txt" "${TEST_DIR}/Thư mục cấp 1"
-    else
-        fail "RAR Extraction" "Files not found"
-    fi
+# Test RAR (always executed)
+"${BUILD_BIN}" --quick "${TEST_DIR}/test_small.rar" >/dev/null 2>&1 || true
+if [ -f "${TEST_DIR}/hello.txt" ] && [ -f "${TEST_DIR}/Thư mục cấp 1/Thư mục con/Tiếng Việt có dấu - Đồ án tốt nghiệp.txt" ]; then
+    pass "Quick Extract RAR with Vietnamese Unicode file names & hierarchy preserved"
+    rm -rf "${TEST_DIR}/hello.txt" "${TEST_DIR}/Thư mục cấp 1"
+else
+    fail "RAR Extraction" "Files not found"
 fi
 
 # -------------------------------------------------------------------------
@@ -416,35 +427,46 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "[Test 13] Real Finder Native Service Integration ('Giải nén nhanh với UpackX')..."
-FINDER_TEST_DIR="${TEST_DIR}/Thư mục Finder Tiếng Việt có dấu"
-mkdir -p "${FINDER_TEST_DIR}"
-echo "Finder Native Service Integration Success!" > "${FINDER_TEST_DIR}/nội dung gốc.txt"
+if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ] || [ ! -d "/Applications/UpackX.app" ]; then
+    skip "Finder Native NSService ('Giải nén nhanh với UpackX')" "No interactive Finder session or /Applications/UpackX.app not installed"
+else
+    FINDER_TEST_DIR="${TEST_DIR}/Thư mục Finder Tiếng Việt có dấu"
+    mkdir -p "${FINDER_TEST_DIR}"
+    echo "Finder Native Service Integration Success!" > "${FINDER_TEST_DIR}/nội dung gốc.txt"
 
-(cd "${FINDER_TEST_DIR}" && zip "tài liệu quan trọng.zip" "nội dung gốc.txt") >/dev/null
-rm -f "${FINDER_TEST_DIR}/nội dung gốc.txt"
+    (cd "${FINDER_TEST_DIR}" && zip "tài liệu quan trọng.zip" "nội dung gốc.txt") >/dev/null
+    rm -f "${FINDER_TEST_DIR}/nội dung gốc.txt"
 
-# Execute native Cocoa NSService via Swift
-SWIFT_RUNNER_RES=$(swift -e "
+    # Ensure LaunchServices points exclusively to /Applications/UpackX.app before NSPerformService
+    if [ -x "${LSREGISTER_BIN}" ]; then
+        "${LSREGISTER_BIN}" -u "${PROJECT_DIR}/build/UpackX.app" 2>/dev/null || true
+        "${LSREGISTER_BIN}" -f "/Applications/UpackX.app" 2>/dev/null || true
+    fi
+
+    # Execute native Cocoa NSService via Swift
+    SWIFT_RUNNER_RES=$(swift -e "
 import AppKit
 
 let zipPath = \"${FINDER_TEST_DIR}/tài liệu quan trọng.zip\"
 let url = URL(fileURLWithPath: zipPath)
 let pb = NSPasteboard.withUniqueName()
-pb.declareTypes([.fileURL], owner: nil)
+pb.clearContents()
 pb.writeObjects([url as NSURL])
 
 let ok = NSPerformService(\"Giải nén nhanh với UpackX\", pb)
-print(\"RESULT:\(ok)\")
+print(\"RESULT:\\(ok)\")
 " 2>&1 || true)
 
-sleep 1.0
+    for _ in {1..30}; do
+        [ -f "${FINDER_TEST_DIR}/nội dung gốc.txt" ] && break
+        sleep 0.1
+    done
 
-if [ -f "${FINDER_TEST_DIR}/nội dung gốc.txt" ]; then
-    pass "Finder Native NSService extracted archive directly into containing folder without extra enclosing folder"
-elif [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-    pass "Finder Native NSService dispatch verified (Headless CI runner session)"
-else
-    fail "Finder Native NSService" "Extracted file not found at expected location ($SWIFT_RUNNER_RES)"
+    if [ -f "${FINDER_TEST_DIR}/nội dung gốc.txt" ]; then
+        pass "Live Finder NSPerformService ('Giải nén nhanh với UpackX') extracted archive directly into containing folder"
+    else
+        fail "Finder Native NSService" "Extracted file not found at expected location ($SWIFT_RUNNER_RES)"
+    fi
 fi
 
 # -------------------------------------------------------------------------
@@ -575,40 +597,35 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "[Test 20] 7Z Conflict Handling & Strategy Verification..."
-if command -v 7zz >/dev/null; then
-    SEVENZ_TEST_DIR="${TEST_DIR}/7z_conflict"
-    mkdir -p "${SEVENZ_TEST_DIR}/src" "${SEVENZ_TEST_DIR}/dest"
-    echo "NEW CONTENT FROM 7Z" > "${SEVENZ_TEST_DIR}/src/conflict.txt"
-    echo "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" > "${SEVENZ_TEST_DIR}/dest/conflict.txt"
-    
-    (cd "${SEVENZ_TEST_DIR}/src" && 7zz a "${SEVENZ_TEST_DIR}/archive.7z" conflict.txt >/dev/null)
-    
-    # Test --skip strategy
-    "${BUILD_BIN}" --quick --skip "${SEVENZ_TEST_DIR}/archive.7z" >/dev/null 2>&1 || true
-    ORIG_TXT=$(cat "${SEVENZ_TEST_DIR}/src/conflict.txt")
-    if [ -f "${SEVENZ_TEST_DIR}/conflict.txt" ]; then
-        # When quick extracted next to archive, check non-overwrite if existing
-        pass "7Z extraction strategy handled without destructive overwrite"
-    else
-        pass "7Z extraction strategy handled"
-    fi
-    
-    # Test --rename strategy
-    WORK_7Z="${SEVENZ_TEST_DIR}/work_rename"
-    mkdir -p "${WORK_7Z}"
-    echo "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" > "${WORK_7Z}/conflict.txt"
-    cp "${SEVENZ_TEST_DIR}/archive.7z" "${WORK_7Z}/"
-    
-    "${BUILD_BIN}" --quick --rename "${WORK_7Z}/archive.7z" >/dev/null 2>&1 || true
-    
-    ORIG_CHECK=$(cat "${WORK_7Z}/conflict.txt")
-    if [ "${ORIG_CHECK}" = "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" ] && [ -f "${WORK_7Z}/conflict (1).txt" ]; then
-        pass "7Z conflict strategy (.rename) generates safe 'conflict (1).txt' without overwriting"
-    else
-        fail "7Z Conflict Strategy" "Rename failed or original file was overwritten"
-    fi
+SEVENZ_TEST_DIR="${TEST_DIR}/7z_conflict"
+mkdir -p "${SEVENZ_TEST_DIR}/src" "${SEVENZ_TEST_DIR}/work_skip"
+echo "NEW CONTENT FROM 7Z" > "${SEVENZ_TEST_DIR}/src/conflict.txt"
+(cd "${SEVENZ_TEST_DIR}/src" && "${SEVEN_Z_BIN}" a "${SEVENZ_TEST_DIR}/archive.7z" conflict.txt >/dev/null)
+
+# 1. Test --skip strategy
+echo "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" > "${SEVENZ_TEST_DIR}/work_skip/conflict.txt"
+cp "${SEVENZ_TEST_DIR}/archive.7z" "${SEVENZ_TEST_DIR}/work_skip/"
+"${BUILD_BIN}" --quick --skip "${SEVENZ_TEST_DIR}/work_skip/archive.7z" >/dev/null 2>&1 || true
+ORIG_SKIP_CHECK=$(cat "${SEVENZ_TEST_DIR}/work_skip/conflict.txt")
+if [ "${ORIG_SKIP_CHECK}" = "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" ] && [ ! -f "${SEVENZ_TEST_DIR}/work_skip/conflict (1).txt" ]; then
+    pass "7Z conflict strategy (.skip) preserved original file without overwriting or renaming"
 else
-    pass "7zz binary not in system PATH, skipped live 7zz conflict check"
+    fail "7Z Skip Strategy" "Original file was overwritten or unexpectedly renamed"
+fi
+
+# 2. Test --rename strategy
+WORK_7Z="${SEVENZ_TEST_DIR}/work_rename"
+mkdir -p "${WORK_7Z}"
+echo "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" > "${WORK_7Z}/conflict.txt"
+cp "${SEVENZ_TEST_DIR}/archive.7z" "${WORK_7Z}/"
+
+"${BUILD_BIN}" --quick --rename "${WORK_7Z}/archive.7z" >/dev/null 2>&1 || true
+
+ORIG_CHECK=$(cat "${WORK_7Z}/conflict.txt")
+if [ "${ORIG_CHECK}" = "ORIGINAL 7Z CONTENT DO NOT OVERWRITE" ] && [ -f "${WORK_7Z}/conflict (1).txt" ]; then
+    pass "7Z conflict strategy (.rename) generates safe 'conflict (1).txt' without overwriting"
+else
+    fail "7Z Conflict Strategy" "Rename failed or original file was overwritten"
 fi
 
 # -------------------------------------------------------------------------
@@ -616,18 +633,16 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "[Test 21] 7Z Password Security via Stdin..."
-if command -v 7zz >/dev/null; then
-    SEC_DIR="${TEST_DIR}/sec_7z"
-    mkdir -p "${SEC_DIR}"
-    echo "TOP SECRET 7Z DATA" > "${SEC_DIR}/secret.txt"
-    (cd "${SEC_DIR}" && 7zz a -p"SuperSecret123" "${TEST_DIR}/test_encrypted.7z" secret.txt >/dev/null)
-    
-    # Missing password: must fail
-    if "${BUILD_BIN}" --quick "${TEST_DIR}/test_encrypted.7z" >/dev/null 2>&1; then
-        fail "7Z Security" "Protected 7z archive extracted without password!"
-    else
-        pass "Encrypted 7z archive correctly rejected when password is missing"
-    fi
+SEC_DIR="${TEST_DIR}/sec_7z"
+mkdir -p "${SEC_DIR}"
+echo "TOP SECRET 7Z DATA" > "${SEC_DIR}/secret.txt"
+(cd "${SEC_DIR}" && "${SEVEN_Z_BIN}" a -p"SuperSecret123" "${TEST_DIR}/test_encrypted.7z" secret.txt >/dev/null)
+
+# Missing password: must fail
+if "${BUILD_BIN}" --quick "${TEST_DIR}/test_encrypted.7z" >/dev/null 2>&1; then
+    fail "7Z Security" "Protected 7z archive extracted without password!"
+else
+    pass "Encrypted 7z archive correctly rejected when password is missing"
 fi
 
 # -------------------------------------------------------------------------
@@ -841,31 +856,41 @@ fi
 # -------------------------------------------------------------------------
 echo ""
 echo "[Test 29] Real Finder Native Service Integration ('Nén nhanh với UpackX')..."
-FINDER_COMP_DIR="${TEST_DIR}/Finder_Compress_Action"
-mkdir -p "${FINDER_COMP_DIR}/MyFolder"
-echo "Quick compress payload" > "${FINDER_COMP_DIR}/MyFolder/data.txt"
+if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ] || [ ! -d "/Applications/UpackX.app" ]; then
+    skip "Finder Native NSService ('Nén nhanh với UpackX')" "No interactive Finder session or /Applications/UpackX.app not installed"
+else
+    FINDER_COMP_DIR="${TEST_DIR}/Finder_Compress_Action"
+    mkdir -p "${FINDER_COMP_DIR}/MyFolder"
+    echo "Quick compress payload" > "${FINDER_COMP_DIR}/MyFolder/data.txt"
 
-SWIFT_COMP_RES=$(swift -e "
+    if [ -x "${LSREGISTER_BIN}" ]; then
+        "${LSREGISTER_BIN}" -u "${PROJECT_DIR}/build/UpackX.app" 2>/dev/null || true
+        "${LSREGISTER_BIN}" -f "/Applications/UpackX.app" 2>/dev/null || true
+    fi
+
+    SWIFT_COMP_RES=$(swift -e "
 import AppKit
 
 let folderPath = \"${FINDER_COMP_DIR}/MyFolder\"
 let url = URL(fileURLWithPath: folderPath)
 let pb = NSPasteboard.withUniqueName()
-pb.declareTypes([.fileURL], owner: nil)
+pb.clearContents()
 pb.writeObjects([url as NSURL])
 
 let ok = NSPerformService(\"Nén nhanh với UpackX\", pb)
-print(\"RESULT:\(ok)\")
+print(\"RESULT:\\(ok)\")
 " 2>&1 || true)
 
-sleep 1.0
+    for _ in {1..30}; do
+        [ -f "${FINDER_COMP_DIR}/MyFolder.zip" ] && break
+        sleep 0.1
+    done
 
-if [ -f "${FINDER_COMP_DIR}/MyFolder.zip" ]; then
-    pass "Finder Native NSService created 'MyFolder.zip' right beside source folder"
-elif [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-    pass "Finder Native NSService compression dispatch verified (Headless CI runner session)"
-else
-    pass "Finder Native NSService dispatch verified ($SWIFT_COMP_RES)"
+    if [ -f "${FINDER_COMP_DIR}/MyFolder.zip" ] && unzip -l "${FINDER_COMP_DIR}/MyFolder.zip" | grep -q "MyFolder/data.txt"; then
+        pass "Live Finder NSPerformService ('Nén nhanh với UpackX') created 'MyFolder.zip' right beside source folder"
+    else
+        fail "Finder Native NSService ('Nén nhanh với UpackX')" "Expected '${FINDER_COMP_DIR}/MyFolder.zip' not found ($SWIFT_COMP_RES)"
+    fi
 fi
 
 # -------------------------------------------------------------------------
@@ -1257,24 +1282,30 @@ echo ""
 echo "[Test 46] Format Consistency (ZIP, TAR.GZ, 7Z, RAR) Destination Semantics..."
 T46_DIR="${TEST_DIR}/t46_formats"
 mkdir -p "${T46_DIR}/src/RootPkg"
-echo "FORMAT_CONSISTENCY_PAYLOAD" > "${T46_DIR}/src/RootPkg/item.txt"
+printf "FORMAT_CONSISTENCY_PAYLOAD\n" > "${T46_DIR}/src/RootPkg/item.txt"
 (cd "${T46_DIR}/src" && zip -r "${T46_DIR}/RootPkg.zip" RootPkg >/dev/null)
 (cd "${T46_DIR}/src" && tar -czf "${T46_DIR}/RootPkg.tar.gz" RootPkg >/dev/null)
-if [ -x "${SEVEN_Z_BIN}" ]; then
-    (cd "${T46_DIR}/src" && "${SEVEN_Z_BIN}" a "${T46_DIR}/RootPkg.7z" RootPkg >/dev/null)
+(cd "${T46_DIR}/src" && "${SEVEN_Z_BIN}" a "${T46_DIR}/RootPkg.7z" RootPkg >/dev/null)
+
+if command -v rar >/dev/null; then
+    (cd "${T46_DIR}/src" && rar a -r -idq "${T46_DIR}/RootPkg.rar" RootPkg) >/dev/null
+else
+    base64 -D > "${T46_DIR}/RootPkg.rar" << 'EOF_RAR_T46'
+UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAuOoJFJgICmwAGmwCkgwJ0VvxqZTyFFYAAARBSb290UGtnL2l0ZW0udHh0Rk9STUFUX0NPTlNJU1RFTkNZX1BBWUxPQUQKT7zrjBcCAgADAO2DAXRW/GqAAAEHUm9vdFBrZx13VlEDBQQA
+EOF_RAR_T46
+    echo "9c205812dfdd14f6a99e14a8a08c5bb0c355d187026b244561b3f81abcc489e5  ${T46_DIR}/RootPkg.rar" | shasum -a 256 -c - >/dev/null
 fi
 
-for fmt_ext in "zip" "tar.gz" "7z"; do
+for fmt_ext in "zip" "tar.gz" "7z" "rar"; do
     ARCH_FILE="${T46_DIR}/RootPkg.${fmt_ext}"
-    if [ -f "${ARCH_FILE}" ]; then
-        OUT_FMT="${T46_DIR}/out_${fmt_ext}"
-        mkdir -p "${OUT_FMT}"
-        "${BUILD_BIN}" --extract-to --headless --enclosing-folder "${ARCH_FILE}" -o "${OUT_FMT}" >/dev/null 2>&1
-        if [ -f "${OUT_FMT}/RootPkg/item.txt" ] && [ ! -d "${OUT_FMT}/RootPkg/RootPkg" ]; then
-            pass "Format .${fmt_ext} extracted with consistent destination semantics and zero duplicate root folder"
-        else
-            fail "Format .${fmt_ext} Consistency" "Unexpected structure in ${OUT_FMT}"
-        fi
+    OUT_FMT="${T46_DIR}/out_${fmt_ext}"
+    mkdir -p "${OUT_FMT}"
+    "${BUILD_BIN}" --extract-to --headless --enclosing-folder "${ARCH_FILE}" -o "${OUT_FMT}" >/dev/null 2>&1
+    if [ -f "${OUT_FMT}/RootPkg/item.txt" ] && [ ! -d "${OUT_FMT}/RootPkg/RootPkg" ] && \
+       echo "4a1cbf8e7546513c84c5a95e7ec823c923fcd4cd0e916b2e3f94ca280c86c50a  ${OUT_FMT}/RootPkg/item.txt" | shasum -a 256 -c - >/dev/null 2>&1; then
+        pass "Format .${fmt_ext} extracted with consistent destination semantics, SHA-256 verified & zero duplicate root folder"
+    else
+        fail "Format .${fmt_ext} Consistency" "Unexpected structure or checksum mismatch in ${OUT_FMT}"
     fi
 done
 
@@ -1488,8 +1519,8 @@ ln -s "${T49_DIR}/RealDest" "${T49_DIR}/LinkToDest"
 "${BUILD_BIN}" --compress --headless "${T49_DIR}/LinkToSource" -o "${T49_DIR}/LinkToDest/SymArchive.zip" >/dev/null 2>&1
 "${BUILD_BIN}" --extract-to --headless "${T49_DIR}/LinkToDest/SymArchive.zip" -o "${T49_DIR}/LinkToDest/Unpacked" >/dev/null 2>&1
 
-if [ -f "${T49_DIR}/RealDest/Unpacked/LinkToSource/Nested/data.txt" ]; then
-    pass "Compression & extraction through symlinked source and destination paths succeeded cleanly"
+if [ -f "${T49_DIR}/RealDest/Unpacked/LinkToSource/Nested/data.txt" ] && [ ! -L "${T49_DIR}/RealDest/Unpacked/LinkToSource" ]; then
+    pass "Compression & extraction through symlinked source and destination paths archived full directory contents cleanly"
 else
     fail "Symlink Path Support" "File missing when compressing/extracting via symlinked directories"
 fi
@@ -1610,9 +1641,390 @@ else
     fail "User Directory Protection" "Existing user directory was harmed or colliding file not renamed"
 fi
 
+# -------------------------------------------------------------------------
+# Test 54: Dedicated Real RAR Regression Suite (Quick Extract, Extract To, Enclosing Folder ON/OFF)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 54] Dedicated Real RAR Regression Suite (Quick Extract, Extract To, Enclosing Folder ON/OFF)..."
+T54_DIR="${TEST_DIR}/t54_rar"
+mkdir -p "${T54_DIR}/Downloads" "${T54_DIR}/Movies/Project" "${T54_DIR}/EnclosingLoose" "${T54_DIR}/EnclosingRootOff" "${T54_DIR}/EnclosingRootOn"
+
+# 1. Decode & verify checksum of valid RAR fixture containing root file clip.mp4
+base64 -D > "${T54_DIR}/Downloads/Video.rar" << 'EOF_RAR_VIDEO'
+UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAC5oxNKHgIClQAGlQCkgwJ0VvxqXgtThoAAAQhjbGlwLm1wNENMSVBfTVA0X1JBUl9QQVlMT0FECh13VlEDBQQA
+EOF_RAR_VIDEO
+if echo "caf440f32d8988499f42e40c43fcc9bc436d008e0b8255ee1c72441acc6ffa27  ${T54_DIR}/Downloads/Video.rar" | shasum -a 256 -c - >/dev/null 2>&1; then
+    pass "RAR root-file fixture 'Video.rar' SHA-256 checksum verified"
+else
+    fail "RAR Fixture Verification" "Video.rar SHA-256 checksum mismatch"
+fi
+
+# 2. RAR Quick Extract: /Downloads/Video.rar -> /Downloads/clip.mp4 (NO /Downloads/Video/clip.mp4)
+"${BUILD_BIN}" --quick --headless "${T54_DIR}/Downloads/Video.rar" >/dev/null 2>&1
+if [ -f "${T54_DIR}/Downloads/clip.mp4" ] && [ ! -d "${T54_DIR}/Downloads/Video" ] && \
+   echo "0ef41ce0cd322636f4fa47632b49f4bc48119a6038e63ea7d48275d939ef8160  ${T54_DIR}/Downloads/clip.mp4" | shasum -a 256 -c - >/dev/null 2>&1; then
+    pass "RAR Quick Extract placed clip.mp4 directly beside Video.rar without wrapper (SHA-256 verified)"
+else
+    fail "RAR Quick Extract" "Expected ${T54_DIR}/Downloads/clip.mp4 without wrapper"
+fi
+
+# 3. RAR Extract To (/Movies/Project, Enclosing OFF): -> /Movies/Project/clip.mp4
+"${BUILD_BIN}" --extract-to --headless --no-enclosing-folder "${T54_DIR}/Downloads/Video.rar" -o "${T54_DIR}/Movies/Project" >/dev/null 2>&1
+if [ -f "${T54_DIR}/Movies/Project/clip.mp4" ] && [ ! -d "${T54_DIR}/Movies/Project/Video" ] && \
+   echo "0ef41ce0cd322636f4fa47632b49f4bc48119a6038e63ea7d48275d939ef8160  ${T54_DIR}/Movies/Project/clip.mp4" | shasum -a 256 -c - >/dev/null 2>&1; then
+    pass "RAR Extract To (/Movies/Project, Enclosing OFF) extracted clip.mp4 without wrapper (SHA-256 verified)"
+else
+    fail "RAR Extract To (Enclosing OFF)" "Expected ${T54_DIR}/Movies/Project/clip.mp4"
+fi
+
+# 4. RAR Extract To (Enclosing ON for loose root file): -> EnclosingLoose/Video/clip.mp4
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T54_DIR}/Downloads/Video.rar" -o "${T54_DIR}/EnclosingLoose" >/dev/null 2>&1
+if [ -f "${T54_DIR}/EnclosingLoose/Video/clip.mp4" ] && [ ! -d "${T54_DIR}/EnclosingLoose/Video/Video" ] && \
+   echo "0ef41ce0cd322636f4fa47632b49f4bc48119a6038e63ea7d48275d939ef8160  ${T54_DIR}/EnclosingLoose/Video/clip.mp4" | shasum -a 256 -c - >/dev/null 2>&1; then
+    pass "RAR Extract To (Enclosing ON, loose file) created single wrapper EnclosingLoose/Video/clip.mp4"
+else
+    fail "RAR Extract To (Enclosing ON Loose)" "Expected EnclosingLoose/Video/clip.mp4"
+fi
+
+# 5. RAR with Real Root Folder (RootPkg.rar): Enclosing OFF vs Enclosing ON (no RootPkg/RootPkg/)
+base64 -D > "${T54_DIR}/RootPkg.rar" << 'EOF_RAR_ROOTPKG'
+UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAuOoJFJgICmwAGmwCkgwJ0VvxqZTyFFYAAARBSb290UGtnL2l0ZW0udHh0Rk9STUFUX0NPTlNJU1RFTkNZX1BBWUxPQUQKT7zrjBcCAgADAO2DAXRW/GqAAAEHUm9vdFBrZx13VlEDBQQA
+EOF_RAR_ROOTPKG
+"${BUILD_BIN}" --extract-to --headless --no-enclosing-folder "${T54_DIR}/RootPkg.rar" -o "${T54_DIR}/EnclosingRootOff" >/dev/null 2>&1
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T54_DIR}/RootPkg.rar" -o "${T54_DIR}/EnclosingRootOn" >/dev/null 2>&1
+
+if [ -f "${T54_DIR}/EnclosingRootOff/RootPkg/item.txt" ] && [ ! -d "${T54_DIR}/EnclosingRootOff/RootPkg/RootPkg" ] && \
+   [ -f "${T54_DIR}/EnclosingRootOn/RootPkg/item.txt" ] && [ ! -d "${T54_DIR}/EnclosingRootOn/RootPkg/RootPkg" ]; then
+    pass "RAR with real root folder preserved RootPkg/item.txt under both Enclosing OFF and ON without RootPkg/RootPkg/"
+else
+    fail "RAR Root Folder Preservation" "RAR root folder lost or duplicated"
+fi
+
+# -------------------------------------------------------------------------
+# Test 55: All 4 Finder Services Verification (API Provider vs Live Finder /Applications/UpackX.app)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 55] All 4 Finder Services Verification (API Contract + Live /Applications/UpackX.app)..."
+T55_DIR="${TEST_DIR}/t55_services"
+mkdir -p "${T55_DIR}/api_qext" "${T55_DIR}/api_extto_src" "${T55_DIR}/api_extto_dest"
+mkdir -p "${T55_DIR}/api_qcomp/FolderQuick" "${T55_DIR}/api_compto_src/FolderCustom.v1.4" "${T55_DIR}/api_compto_dest"
+
+echo "API_QUICK_EXTRACT_DATA" > "${T55_DIR}/api_qext/qfile.txt"
+(cd "${T55_DIR}/api_qext" && zip "${T55_DIR}/api_qext/qarch.zip" qfile.txt >/dev/null)
+rm -f "${T55_DIR}/api_qext/qfile.txt"
+
+echo "API_EXTRACT_TO_DATA" > "${T55_DIR}/api_extto_src/efile.txt"
+(cd "${T55_DIR}/api_extto_src" && zip "${T55_DIR}/api_extto_src/earch.zip" efile.txt >/dev/null)
+
+echo "API_QUICK_COMPRESS_DATA" > "${T55_DIR}/api_qcomp/FolderQuick/cfile.txt"
+echo "API_COMPRESS_TO_DATA" > "${T55_DIR}/api_compto_src/FolderCustom.v1.4/custom.txt"
+
+# Part A: Direct NSServices Provider API Test for all 4 service selectors
+T55_SWIFT="${T55_DIR}/main.swift"
+cat << 'EOF' > "${T55_SWIFT}"
+import AppKit
+
+let baseDir = CommandLine.arguments[1]
+let delegate = AppDelegate()
+delegate.suppressAutoTerminationForTesting = true
+delegate.isHeadlessMode = true
+
+func waitFor(_ path: String, timeout: TimeInterval = 10.0) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        if FileManager.default.fileExists(atPath: path) {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            return true
+        }
+    }
+    return false
+}
+
+func makePasteboard(for path: String) -> NSPasteboard {
+    let pb = NSPasteboard.withUniqueName()
+    pb.clearContents()
+    pb.writeObjects([URL(fileURLWithPath: path) as NSURL])
+    return pb
+}
+
+var errPtr: NSString? = nil
+
+// 1. [API Test] quickExtractService
+let pb1 = makePasteboard(for: "\(baseDir)/api_qext/qarch.zip")
+delegate.quickExtractService(pb1, userData: nil, error: &errPtr)
+guard errPtr == nil, waitFor("\(baseDir)/api_qext/qfile.txt") else {
+    fputs("API quickExtractService failed\n", stderr)
+    exit(1)
+}
+
+// 2. [API Test] extractToService (opens ExtractToWindowController -> verify default path & confirm custom destination)
+let pb2 = makePasteboard(for: "\(baseDir)/api_extto_src/earch.zip")
+delegate.extractToService(pb2, userData: nil, error: &errPtr)
+guard errPtr == nil, let extractWC = delegate.extractToController else {
+    fputs("API extractToService did not open ExtractToWindowController\n", stderr)
+    exit(2)
+}
+guard extractWC.currentDestinationPath == "\(baseDir)/api_extto_src", !extractWC.isEnclosingFolderEnabled else {
+    fputs("ExtractToWindowController initial state wrong: \(extractWC.currentDestinationPath)\n", stderr)
+    exit(3)
+}
+try! extractWC.confirmForTesting(destinationPath: "\(baseDir)/api_extto_dest", createEnclosingFolder: false, conflictStrategy: .overwrite)
+guard waitFor("\(baseDir)/api_extto_dest/efile.txt") else {
+    fputs("API extractToService custom destination extraction failed\n", stderr)
+    exit(4)
+}
+
+// 3. [API Test] quickCompressService
+let pb3 = makePasteboard(for: "\(baseDir)/api_qcomp/FolderQuick")
+delegate.quickCompressService(pb3, userData: nil, error: &errPtr)
+guard errPtr == nil, waitFor("\(baseDir)/api_qcomp/FolderQuick.zip") else {
+    fputs("API quickCompressService failed\n", stderr)
+    exit(5)
+}
+
+// 4. [API Test] compressToService (opens CompressToWindowController -> verify dotted folder name & confirm custom destination)
+let pb4 = makePasteboard(for: "\(baseDir)/api_compto_src/FolderCustom.v1.4")
+delegate.compressToService(pb4, userData: nil, error: &errPtr)
+guard errPtr == nil, let compressWC = delegate.compressToController else {
+    fputs("API compressToService did not open CompressToWindowController\n", stderr)
+    exit(6)
+}
+guard compressWC.currentArchiveFileName == "FolderCustom.v1.4.zip" else {
+    fputs("CompressToWindowController stripped dots from folder name: \(compressWC.currentArchiveFileName)\n", stderr)
+    exit(7)
+}
+try! compressWC.confirmForTesting(destinationDirectoryPath: "\(baseDir)/api_compto_dest", archiveFileName: "CustomNamedArchive.zip.zip", level: .fast)
+guard waitFor("\(baseDir)/api_compto_dest/CustomNamedArchive.zip") else {
+    fputs("API compressToService custom output failed\n", stderr)
+    exit(8)
+}
+
+exit(0)
+EOF
+
+swiftc -target $(uname -m)-apple-macos14.0 \
+    -larchive \
+    -framework AppKit \
+    -framework UniformTypeIdentifiers \
+    -framework UserNotifications \
+    "${NON_MAIN_SWIFT[@]}" \
+    "${T55_SWIFT}" \
+    -o "${T55_DIR}/run_services_api"
+
+if "${T55_DIR}/run_services_api" "${T55_DIR}"; then
+    pass "[API Service Provider Test] All 4 NSServices selectors (quickExtract, extractTo, quickCompress, compressTo) verified end-to-end"
+else
+    fail "[API Service Provider Test]" "One or more NSService provider selectors failed"
+fi
+
+# Part B: Live Finder / LaunchServices Verification against /Applications/UpackX.app
+if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ] || [ ! -d "/Applications/UpackX.app" ]; then
+    skip "[Live Finder Session Test] 4 Services on /Applications/UpackX.app" "Headless CI environment without interactive Finder session"
+else
+    if [ -x "${LSREGISTER_BIN}" ]; then
+        "${LSREGISTER_BIN}" -u "${PROJECT_DIR}/build/UpackX.app" 2>/dev/null || true
+        "${LSREGISTER_BIN}" -f "/Applications/UpackX.app" 2>/dev/null || true
+    fi
+    /System/Library/CoreServices/pbs -flush 2>/dev/null || true
+    /System/Library/CoreServices/pbs -update 2>/dev/null || true
+
+    # Verify that LaunchServices has ONLY /Applications/UpackX.app registered for com.upackx.extractor
+    REGISTERED_PATHS=$("${LSREGISTER_BIN}" -dump | grep -B 10 "identifier:                 com.upackx.extractor" | grep "path:" | awk '{print $2}' | sort -u || true)
+    if [ "${REGISTERED_PATHS}" = "/Applications/UpackX.app" ]; then
+        pass "[LaunchServices Check] Only /Applications/UpackX.app is registered for com.upackx.extractor (zero build/ or DMG leakage)"
+    else
+        fail "[LaunchServices Check]" "Unexpected registered bundle paths: ${REGISTERED_PATHS}"
+    fi
+
+    # Live Test of Dialog Services ('Giải nén… với UpackX' & 'Nén… với UpackX') launching /Applications/UpackX.app
+    LIVE_DIALOG_SWIFT="${T55_DIR}/live_dialog_check.swift"
+    cat << 'EOF' > "${LIVE_DIALOG_SWIFT}"
+import AppKit
+import CoreGraphics
+
+let archivePath = CommandLine.arguments[1]
+let serviceName = CommandLine.arguments[2]
+
+let pb = NSPasteboard.withUniqueName()
+pb.clearContents()
+pb.writeObjects([URL(fileURLWithPath: archivePath) as NSURL])
+
+guard NSPerformService(serviceName, pb) else {
+    fputs("NSPerformService returned false for \(serviceName)\n", stderr)
+    exit(1)
+}
+
+// Wait up to 3 seconds for /Applications/UpackX.app to present its window and verify bundleURL == /Applications/UpackX.app
+let deadline = Date().addingTimeInterval(3.0)
+var verifiedAppPath = false
+while Date() < deadline {
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.upackx.extractor")
+    for app in apps {
+        if app.bundleURL?.path == "/Applications/UpackX.app" {
+            verifiedAppPath = true
+            app.terminate()
+            break
+        }
+    }
+    if verifiedAppPath { break }
+    usleep(100_000)
+}
+
+exit(verifiedAppPath ? 0 : 2)
+EOF
+    swiftc -target $(uname -m)-apple-macos14.0 "${LIVE_DIALOG_SWIFT}" -o "${T55_DIR}/live_dialog_check_bin"
+
+    if "${T55_DIR}/live_dialog_check_bin" "${T55_DIR}/api_extto_src/earch.zip" "Giải nén… với UpackX"; then
+        pass "[Live Finder Session Test] 'Giải nén… với UpackX' dispatched to /Applications/UpackX.app"
+    else
+        fail "[Live Finder Session Test] 'Giải nén… với UpackX'" "Did not launch /Applications/UpackX.app"
+    fi
+    sleep 0.3
+
+    if "${T55_DIR}/live_dialog_check_bin" "${T55_DIR}/api_compto_src/FolderCustom.v1.4" "Nén… với UpackX"; then
+        pass "[Live Finder Session Test] 'Nén… với UpackX' dispatched to /Applications/UpackX.app"
+    else
+        fail "[Live Finder Session Test] 'Nén… với UpackX'" "Did not launch /Applications/UpackX.app"
+    fi
+    killall UpackX 2>/dev/null || true
+fi
+
+# -------------------------------------------------------------------------
+# Test 56: Compression Conflict Policy 'Skip' Status & Notification Accuracy
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 56] Compression Conflict Policy 'Skip' Status & Notification Accuracy..."
+T56_DIR="${TEST_DIR}/t56_skip_status"
+mkdir -p "${T56_DIR}"
+echo "ORIGINAL_ARCHIVE_BYTES_DO_NOT_TOUCH" > "${T56_DIR}/Existing.zip"
+echo "NEW_SOURCE_FILE" > "${T56_DIR}/source.txt"
+
+SKIP_CLI_OUT=$("${BUILD_BIN}" --compress --headless --skip "${T56_DIR}/source.txt" -o "${T56_DIR}/Existing.zip" 2>&1)
+EXISTING_AFTER=$(cat "${T56_DIR}/Existing.zip")
+
+if [ "${EXISTING_AFTER}" = "ORIGINAL_ARCHIVE_BYTES_DO_NOT_TOUCH" ] && \
+   echo "${SKIP_CLI_OUT}" | grep -q "Skipped compression" && \
+   ! echo "${SKIP_CLI_OUT}" | grep -q "Compressed 0 items"; then
+    pass "CLI --compress --skip accurately reported 'Skipped compression' (never false 'Compressed 0 items') and preserved existing file"
+else
+    fail "Compression Skip CLI Output" "Unexpected output: ${SKIP_CLI_OUT}"
+fi
+
+# Also verify NotificationHelper & CompressionResult.wasSkipped in-process
+T56_SWIFT="${T56_DIR}/main.swift"
+cat << 'EOF' > "${T56_SWIFT}"
+import AppKit
+
+let baseDir = CommandLine.arguments[1]
+let src = URL(fileURLWithPath: "\(baseDir)/source.txt")
+let dest = URL(fileURLWithPath: "\(baseDir)/Existing.zip")
+
+var capturedResult: CompressionResult? = nil
+let opts = CompressionOptions(destinationURL: dest, compressionLevel: .normal, conflictStrategy: .skip)
+ZipCompressor.shared.compress(sources: [src], options: opts) { res in
+    if case .success(let r) = res {
+        capturedResult = r
+        if r.wasSkipped {
+            NotificationHelper.shared.notifyCompressionSkipped(archiveURL: r.destinationURL)
+        } else {
+            NotificationHelper.shared.notifyCompressionSuccess(archiveURL: r.destinationURL, totalItems: r.totalItemsCompressed, archiveSize: r.archiveSize, elapsedTime: r.elapsedTime)
+        }
+    }
+}
+
+guard let r = capturedResult, r.wasSkipped == true, r.totalItemsCompressed == 0 else {
+    fputs("CompressionResult.wasSkipped was not true!\n", stderr)
+    exit(1)
+}
+guard NotificationHelper.shared.lastNotificationTitle == "Đã bỏ qua nén file" else {
+    fputs("Unexpected notification title: \(NotificationHelper.shared.lastNotificationTitle ?? "nil")\n", stderr)
+    exit(2)
+}
+exit(0)
+EOF
+
+swiftc -target $(uname -m)-apple-macos14.0 \
+    -larchive \
+    -framework AppKit \
+    -framework UniformTypeIdentifiers \
+    -framework UserNotifications \
+    "${NON_MAIN_SWIFT[@]}" \
+    "${T56_SWIFT}" \
+    -o "${T56_DIR}/test_skip_notif"
+
+if "${T56_DIR}/test_skip_notif" "${T56_DIR}"; then
+    pass "CompressionResult.wasSkipped == true and NotificationHelper recorded 'Đã bỏ qua nén file' (not false 'Nén hoàn tất')"
+else
+    fail "Compression Skip Notification" "wasSkipped or notification title verification failed"
+fi
+
+# -------------------------------------------------------------------------
+# Test 57: End-to-End Smoke Test & Real Root vs UpackX Wrapper Differentiation
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 57] End-to-End Smoke Test & Real Root Folder vs Wrapper Differentiation..."
+T57_DIR="${TEST_DIR}/t57_smoke"
+mkdir -p "${T57_DIR}/FolderA" "${T57_DIR}/FolderB_Host" "${T57_DIR}/FolderC" "${T57_DIR}/CustomCompOut"
+
+# Prepare 3 archives:
+# 1. LooseRoot.zip: contains loose file 'loose.txt' at root
+mkdir -p "${T57_DIR}/prep/loose"
+echo "LOOSE_CONTENT_V1" > "${T57_DIR}/prep/loose/loose.txt"
+(cd "${T57_DIR}/prep/loose" && zip "${T57_DIR}/LooseRoot.zip" loose.txt >/dev/null)
+cp "${T57_DIR}/LooseRoot.zip" "${T57_DIR}/FolderB_Host/LooseInB.zip"
+
+# 2. GenuineNested.zip: genuinely contains 'Gamma/Gamma/deep.txt' inside the archive
+mkdir -p "${T57_DIR}/prep/nested/Gamma/Gamma"
+echo "GENUINE_NESTED_GAMMA" > "${T57_DIR}/prep/nested/Gamma/Gamma/deep.txt"
+(cd "${T57_DIR}/prep/nested" && zip -r "${T57_DIR}/Gamma.zip" Gamma >/dev/null)
+
+# Smoke Step 1: Extract To FolderA
+"${BUILD_BIN}" --extract-to --headless "${T57_DIR}/LooseRoot.zip" -o "${T57_DIR}/FolderA" >/dev/null 2>&1
+# Smoke Step 2: Quick Extract beside archive in FolderB_Host
+"${BUILD_BIN}" --quick --headless "${T57_DIR}/FolderB_Host/LooseInB.zip" >/dev/null 2>&1
+# Smoke Step 3: Extract To FolderC
+"${BUILD_BIN}" --extract-to --headless "${T57_DIR}/LooseRoot.zip" -o "${T57_DIR}/FolderC" >/dev/null 2>&1
+
+if [ -f "${T57_DIR}/FolderA/loose.txt" ] && \
+   [ -f "${T57_DIR}/FolderB_Host/loose.txt" ] && [ ! -d "${T57_DIR}/FolderB_Host/LooseInB" ] && \
+   [ -f "${T57_DIR}/FolderC/loose.txt" ]; then
+    pass "Smoke chain (Extract To A -> Quick Extract beside B -> Extract To C) verified"
+else
+    fail "Smoke Chain A->B->C" "Unexpected extraction paths in smoke test"
+fi
+
+# Smoke Step 4: Re-extract into existing FolderA with conflicting file (.rename vs .skip vs .overwrite)
+echo "MODIFIED_USER_LOOSE" > "${T57_DIR}/FolderA/loose.txt"
+"${BUILD_BIN}" --extract-to --headless --skip "${T57_DIR}/LooseRoot.zip" -o "${T57_DIR}/FolderA" >/dev/null 2>&1
+if [ "$(cat "${T57_DIR}/FolderA/loose.txt")" = "MODIFIED_USER_LOOSE" ] && [ ! -f "${T57_DIR}/FolderA/loose (1).txt" ]; then
+    pass "Re-extraction into existing destination with --skip preserved modified file"
+else
+    fail "Smoke Conflict Skip" "Modified file was altered or renamed during --skip"
+fi
+
+"${BUILD_BIN}" --extract-to --headless --rename "${T57_DIR}/LooseRoot.zip" -o "${T57_DIR}/FolderA" >/dev/null 2>&1
+if [ "$(cat "${T57_DIR}/FolderA/loose.txt")" = "MODIFIED_USER_LOOSE" ] && [ "$(cat "${T57_DIR}/FolderA/loose (1).txt")" = "LOOSE_CONTENT_V1" ]; then
+    pass "Re-extraction into existing destination with --rename preserved original and created 'loose (1).txt'"
+else
+    fail "Smoke Conflict Rename" "Conflict rename did not preserve both files accurately"
+fi
+
+# Smoke Step 5: Genuine nested folder 'Gamma/Gamma/deep.txt' inside Gamma.zip must NOT be flattened, AND with Enclosing ON must NOT become Gamma/Gamma/Gamma!
+mkdir -p "${T57_DIR}/GammaOff" "${T57_DIR}/GammaOn"
+"${BUILD_BIN}" --extract-to --headless --no-enclosing-folder "${T57_DIR}/Gamma.zip" -o "${T57_DIR}/GammaOff" >/dev/null 2>&1
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T57_DIR}/Gamma.zip" -o "${T57_DIR}/GammaOn" >/dev/null 2>&1
+
+if [ -f "${T57_DIR}/GammaOff/Gamma/Gamma/deep.txt" ] && [ ! -d "${T57_DIR}/GammaOff/Gamma/Gamma/Gamma" ] && \
+   [ -f "${T57_DIR}/GammaOn/Gamma/Gamma/deep.txt" ] && [ ! -d "${T57_DIR}/GammaOn/Gamma/Gamma/Gamma" ]; then
+    pass "Genuine internal nested structure 'Gamma/Gamma/deep.txt' preserved intact without flattening or triple-wrapping"
+else
+    fail "Genuine Nested Structure" "Internal nested folder was flattened or triple-wrapped"
+fi
+
 echo ""
 echo "========================================================"
-echo "    Test Results: ${PASSED} Passed, ${FAILED} Failed"
+echo "    Test Results: ${PASSED} Passed, ${FAILED} Failed, ${SKIPPED} Skipped"
 echo "========================================================"
 
 if [ "${FAILED}" -gt 0 ]; then

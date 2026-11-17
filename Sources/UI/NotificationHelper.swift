@@ -7,6 +7,9 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     public static let categorySuccessID = "UPACKX_SUCCESS"
     public static let actionShowInFinderID = "SHOW_IN_FINDER"
     
+    public private(set) var lastNotificationTitle: String?
+    public private(set) var lastNotificationBody: String?
+    
     private var canUseNotificationCenter: Bool {
         return Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app")
     }
@@ -41,13 +44,33 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifySuccess(archiveName: String, destinationURL: URL, extractedCount: Int, elapsedTime: TimeInterval) {
-        guard canUseNotificationCenter else { return }
         let (title, body) = GoogleDriveHelper.completionMessage(
             for: archiveName,
             destinationURL: destinationURL,
             fileCount: extractedCount,
             elapsedTime: elapsedTime
         )
+        lastNotificationTitle = title
+        lastNotificationBody = body
+        guard canUseNotificationCenter else { return }
+        
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.categoryIdentifier = Self.categorySuccessID
+        content.userInfo = ["destinationPath": destinationURL.path]
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+    
+    public func notifyExtractionSkipped(archiveName: String, destinationURL: URL, skippedCount: Int) {
+        let title = "Đã bỏ qua giải nén"
+        let body = "\(archiveName): Đã bỏ qua \(skippedCount) file trùng tên tại \(destinationURL.lastPathComponent) (giữ nguyên dữ liệu hiện có)."
+        lastNotificationTitle = title
+        lastNotificationBody = body
+        guard canUseNotificationCenter else { return }
         
         let content = UNMutableNotificationContent()
         content.title = title
@@ -93,9 +116,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyCompressionSuccess(archiveURL: URL, totalItems: Int, archiveSize: Int64, elapsedTime: TimeInterval) {
-        guard canUseNotificationCenter else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Nén hoàn tất"
+        let title = "Nén hoàn tất"
         let mb = Double(archiveSize) / 1_048_576.0
         let sizeText: String
         if mb < 0.1 {
@@ -104,7 +125,32 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         } else {
             sizeText = String(format: "%.1f MB", mb)
         }
-        content.body = "\(archiveURL.lastPathComponent): Đã nén \(totalItems) mục (\(sizeText)) trong \(String(format: "%.1fs", elapsedTime))."
+        let body = "\(archiveURL.lastPathComponent): Đã nén \(totalItems) mục (\(sizeText)) trong \(String(format: "%.1fs", elapsedTime))."
+        lastNotificationTitle = title
+        lastNotificationBody = body
+        guard canUseNotificationCenter else { return }
+        
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.categoryIdentifier = Self.categorySuccessID
+        content.userInfo = ["destinationPath": archiveURL.path]
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+    
+    public func notifyCompressionSkipped(archiveURL: URL) {
+        let title = "Đã bỏ qua nén file"
+        let body = "\(archiveURL.lastPathComponent): Đã bỏ qua tạo file nén mới vì file đích đã tồn tại (giữ nguyên file hiện có)."
+        lastNotificationTitle = title
+        lastNotificationBody = body
+        guard canUseNotificationCenter else { return }
+        
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
         content.sound = .default
         content.categoryIdentifier = Self.categorySuccessID
         content.userInfo = ["destinationPath": archiveURL.path]

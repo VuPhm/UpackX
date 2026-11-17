@@ -24,8 +24,8 @@ public struct ExtractionQueueJob {
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
-    private var extractToController: ExtractToWindowController?
-    private var compressToController: CompressToWindowController?
+    public private(set) var extractToController: ExtractToWindowController?
+    public private(set) var compressToController: CompressToWindowController?
     private var activeProgressWC: ProgressWindowController?
     private var updateWindowController: UpdateWindowController?
     
@@ -383,14 +383,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [
             NSPasteboard.ReadingOptionKey.urlReadingFileURLsOnly: true
         ]) as? [URL], !urls.isEmpty {
-            return urls.map { PathSecurity.normalizeFileURL($0) }
+            return PathSecurity.deduplicateURLs(urls)
         }
         if let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
-            return urls.map { PathSecurity.normalizeFileURL($0) }
+            return PathSecurity.deduplicateURLs(urls)
         }
         let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
         if let files = pboard.propertyList(forType: filenamesType) as? [String], !files.isEmpty {
-            return files.map { PathSecurity.normalizeFileURL(URL(fileURLWithPath: $0)) }
+            return PathSecurity.deduplicateURLs(files.map { URL(fileURLWithPath: $0) })
         }
         if let items = pboard.pasteboardItems {
             var results: [URL] = []
@@ -402,7 +402,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             if !results.isEmpty {
-                return results
+                return PathSecurity.deduplicateURLs(results)
             }
         }
         return []
@@ -416,7 +416,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         level: CompressionLevel = .normal,
         conflictStrategy: ConflictStrategy? = nil
     ) {
-        let sources = rawSources.map { PathSecurity.normalizeFileURL($0) }
+        let sources = PathSecurity.deduplicateURLs(rawSources)
         guard !sources.isEmpty else {
             checkTerminationIfNeeded()
             return
@@ -453,7 +453,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     public func showCompressToDialog(sources rawSources: [URL]) {
-        let sources = rawSources.map { PathSecurity.normalizeFileURL($0) }
+        let sources = PathSecurity.deduplicateURLs(rawSources)
         guard !sources.isEmpty else {
             checkTerminationIfNeeded()
             return
@@ -527,14 +527,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                         
                         switch result {
                         case .success(let compResult):
-                            NotificationHelper.shared.notifyCompressionSuccess(
-                                archiveURL: compResult.destinationURL,
-                                totalItems: compResult.totalItemsCompressed,
-                                archiveSize: compResult.archiveSize,
-                                elapsedTime: compResult.elapsedTime
-                            )
-                            if self?.isCommandLineInvocation ?? false {
-                                print("UpackX: Compressed \(compResult.totalItemsCompressed) items to \(compResult.destinationURL.path)")
+                            if compResult.wasSkipped {
+                                NotificationHelper.shared.notifyCompressionSkipped(
+                                    archiveURL: compResult.destinationURL
+                                )
+                                if self?.isCommandLineInvocation ?? false {
+                                    print("UpackX: Skipped compression (destination already exists): \(compResult.destinationURL.path)")
+                                }
+                            } else {
+                                NotificationHelper.shared.notifyCompressionSuccess(
+                                    archiveURL: compResult.destinationURL,
+                                    totalItems: compResult.totalItemsCompressed,
+                                    archiveSize: compResult.archiveSize,
+                                    elapsedTime: compResult.elapsedTime
+                                )
+                                if self?.isCommandLineInvocation ?? false {
+                                    print("UpackX: Compressed \(compResult.totalItemsCompressed) items to \(compResult.destinationURL.path)")
+                                }
                             }
                             self?.checkTerminationIfNeeded()
                             
@@ -734,16 +743,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .success(let extractionResult):
                     self.completedCount += 1
                     self.lastDestinationURL = extractionResult.destinationURL
-                    if total == 1 {
-                        NotificationHelper.shared.notifySuccess(
-                            archiveName: archiveURL.lastPathComponent,
-                            destinationURL: extractionResult.destinationURL,
-                            extractedCount: extractionResult.extractedCount,
-                            elapsedTime: extractionResult.elapsedTime
-                        )
-                    }
-                    if self.isCommandLineInvocation {
-                        print("UpackX: Extracted \(extractionResult.extractedCount) files to \(extractionResult.destinationURL.path)")
+                    if extractionResult.extractedCount == 0 && extractionResult.skippedCount > 0 {
+                        if total == 1 {
+                            NotificationHelper.shared.notifyExtractionSkipped(
+                                archiveName: archiveURL.lastPathComponent,
+                                destinationURL: extractionResult.destinationURL,
+                                skippedCount: extractionResult.skippedCount
+                            )
+                        }
+                        if self.isCommandLineInvocation {
+                            print("UpackX: Skipped \(extractionResult.skippedCount) existing files in \(extractionResult.destinationURL.path) (0 files extracted)")
+                        }
+                    } else {
+                        if total == 1 {
+                            NotificationHelper.shared.notifySuccess(
+                                archiveName: archiveURL.lastPathComponent,
+                                destinationURL: extractionResult.destinationURL,
+                                extractedCount: extractionResult.extractedCount,
+                                elapsedTime: extractionResult.elapsedTime
+                            )
+                        }
+                        if self.isCommandLineInvocation {
+                            print("UpackX: Extracted \(extractionResult.extractedCount) files to \(extractionResult.destinationURL.path)")
+                        }
                     }
                     
                 case .failure(let err):
@@ -894,7 +916,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let options: [NSApplication.AboutPanelOptionKey: Any] = [
             .applicationName: "UpackX",
             .applicationVersion: UpdateManager.shared.currentVersionString,
-            .version: "\(UpdateManager.shared.currentVersionString) (Build 7)",
+            .version: "\(UpdateManager.shared.currentVersionString) (Build 8)",
             .credits: credits
         ]
         NSApp.orderFrontStandardAboutPanel(options)

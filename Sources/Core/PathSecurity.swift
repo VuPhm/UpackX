@@ -74,6 +74,21 @@ public enum PathSecurity {
         return URL(fileURLWithPath: standardized.path, isDirectory: true)
     }
     
+    /// Normalizes and deduplicates an array of file URLs while preserving order (e.g., when NSPasteboard has multiple representations for the same file).
+    public static func deduplicateURLs(_ urls: [URL]) -> [URL] {
+        var result: [URL] = []
+        var seen: Set<String> = []
+        for raw in urls {
+            let norm = normalizeFileURL(raw)
+            let key = norm.path.precomposedStringWithCanonicalMapping
+            if !key.isEmpty && !seen.contains(key) {
+                seen.insert(key)
+                result.append(norm)
+            }
+        }
+        return result
+    }
+    
     /// Cleans raw user-entered or pasted path strings (from UI text fields, pasteboard, drag-and-drop, or CLI).
     /// - Supports `~`, `file://`, trailing `/`, surrounding quotes (`"`, `'`, `“`, `”`, `‘`, `’`), and shell-escaped spaces `\ `.
     /// - NEVER resolves empty or relative strings against the process's current working directory.
@@ -255,7 +270,8 @@ public enum PathSecurity {
     }
     
     /// Default directory for Quick Compress and initial Compress To dialog: containing folder of the first source item.
-    public static func defaultCompressionDirectory(for sources: [URL]) -> URL {
+    public static func defaultCompressionDirectory(for rawSources: [URL]) -> URL {
+        let sources = deduplicateURLs(rawSources)
         guard let first = sources.first else {
             return FileManager.default.homeDirectoryForCurrentUser
         }
@@ -266,7 +282,8 @@ public enum PathSecurity {
     /// - Single directory `Folder.v1.4.1` -> `Folder.v1.4.1.zip` (preserves dots in directory names!).
     /// - Single file `report.pdf` -> `report.zip`.
     /// - Multiple items -> `Archive.zip`.
-    public static func defaultArchiveFileName(for sources: [URL]) -> String {
+    public static func defaultArchiveFileName(for rawSources: [URL]) -> String {
+        let sources = deduplicateURLs(rawSources)
         guard sources.count == 1, let rawFirst = sources.first else {
             return "Archive.zip"
         }
@@ -360,13 +377,24 @@ public enum PathSecurity {
         return !normA.isEmpty && normA == normB
     }
     
-    /// Splits an archive entry path into clean relative components (normalizing `\` to `/` and ignoring `.` and empty segments).
+    /// Splits an archive entry path into clean relative components (normalizing `\` to `/`, resolving `..`, and ignoring `.` and empty segments).
     public static func splitArchiveEntryComponents(_ rawPath: String) -> [String] {
         let normalized = rawPath.replacingOccurrences(of: "\\", with: "/")
-        return normalized
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty && $0 != "." }
+        let rawParts = normalized.split(separator: "/").map(String.init)
+        var resolved: [String] = []
+        for comp in rawParts {
+            if comp.isEmpty || comp == "." {
+                continue
+            } else if comp == ".." {
+                if resolved.isEmpty {
+                    return []
+                }
+                resolved.removeLast()
+            } else {
+                resolved.append(comp)
+            }
+        }
+        return resolved
     }
     
     /// Determines whether all meaningful entries in an archive already reside inside a single root directory matching `enclosingName`.
