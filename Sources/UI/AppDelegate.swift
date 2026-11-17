@@ -1,5 +1,27 @@
 import AppKit
 
+/// Explicit destination semantics per extraction task to guarantee zero state leakage between operations.
+public enum ExtractionDestinationMode: Equatable {
+    /// Quick Extract: Always extract directly beside the archive (`archiveURL.deletingLastPathComponent()`), never creating an enclosing folder.
+    case quickBesideArchive
+    /// Extract To: Extract into an explicit destination directory with an explicit enclosing folder preference.
+    case customDirectory(URL, createEnclosingFolder: Bool)
+}
+
+public struct ExtractionQueueJob {
+    public let task: ExtractionTaskItem
+    public let destinationMode: ExtractionDestinationMode
+    public let conflictStrategy: ConflictStrategy?
+    
+    public init(task: ExtractionTaskItem,
+                destinationMode: ExtractionDestinationMode,
+                conflictStrategy: ConflictStrategy? = nil) {
+        self.task = task
+        self.destinationMode = destinationMode
+        self.conflictStrategy = conflictStrategy
+    }
+}
+
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var extractToController: ExtractToWindowController?
@@ -7,23 +29,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeProgressWC: ProgressWindowController?
     private var updateWindowController: UpdateWindowController?
     
+    private let initialWorkingDirectory: URL
     private var isCommandLineInvocation: Bool = false
     private var isServiceInvocation: Bool = false
     private var isRightClickInvocation: Bool = false
     private var isHeadless: Bool = false
+    private var isInteractiveDialogSession: Bool = false
+    public var suppressAutoTerminationForTesting: Bool = false
+    public var isHeadlessMode: Bool {
+        get { isHeadless }
+        set { isHeadless = newValue }
+    }
     
-    // Sequential Queue State (Extraction)
-    private var taskQueue: [ExtractionTaskItem] = []
+    // Sequential Queue State (Extraction & Compression)
+    private var taskQueue: [ExtractionQueueJob] = []
     private var currentTaskIndex: Int = 0
-    private var queueConflictStrategy: ConflictStrategy? = nil
-    private var queueCustomDestination: URL? = nil
-    private var queueCreateEnclosing: Bool = false
+    private var isProcessingExtractionQueue: Bool = false
+    private var activeCompressionCount: Int = 0
     private var completedCount: Int = 0
     private var failedCount: Int = 0
     private var isCancelled: Bool = false
     private var lastDestinationURL: URL? = nil
     
     public override init() {
+        self.initialWorkingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         super.init()
         let nonSystemArgs = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
         if !nonSystemArgs.isEmpty {
@@ -57,6 +86,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             if !self.isCommandLineInvocation &&
                 !self.isServiceInvocation &&
                 !self.isRightClickInvocation &&
+                !self.isProcessingExtractionQueue &&
+                self.activeCompressionCount == 0 &&
                 self.taskQueue.isEmpty &&
                 self.extractToController == nil &&
                 self.compressToController == nil &&
@@ -67,16 +98,33 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        if isProcessingExtractionQueue ||
+            !taskQueue.isEmpty ||
+            activeCompressionCount > 0 ||
+            activeProgressWC != nil ||
+            extractToController != nil ||
+            compressToController != nil ||
+            updateWindowController != nil {
+            return false
+        }
         return true
     }
     
     private func showMainWindow() {
         if mainWindowController == nil {
             let mwc = MainWindowController()
+            mwc.onFilesSelected = { [weak self] urls, isQuick in
+                let tasks = MultipartDetector.groupArchives(urls)
+                if isQuick {
+                    self?.startQuickExtraction(tasks: tasks, explicitConflictStrategy: nil)
+                } else {
+                    self?.showExtractToDialogForTasks(tasks)
+                }
+            }
             mwc.onFileSelected = { [weak self] url, isQuick in
                 let tasks = MultipartDetector.groupArchives([url])
                 if isQuick {
-                    self?.startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
+                    self?.startQuickExtraction(tasks: tasks, explicitConflictStrategy: nil)
                 } else {
                     self?.showExtractToDialogForTasks(tasks)
                 }
@@ -133,9 +181,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         
         var isCompression = false
         var isQuick = true
+        var explicitQuickFlag = false
+        var createEnclosingFolder = false
         var conflictStrategy: ConflictStrategy? = nil
         var compressionLevel: CompressionLevel = .normal
-        var customOutput: URL? = nil
+        var rawCustomOutput: String? = nil
         var filePaths: [String] = []
         
         var i = 0
@@ -145,12 +195,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 isCompression = true
             } else if arg == "--quick" {
                 isQuick = true
+                explicitQuickFlag = true
             } else if arg == "--extract-to" {
                 isQuick = false
                 isCompression = false
             } else if arg == "--compress-to" {
                 isQuick = false
                 isCompression = true
+            } else if arg == "--enclosing-folder" {
+                createEnclosingFolder = true
+            } else if arg == "--no-enclosing-folder" {
+                createEnclosingFolder = false
             } else if arg == "--level" && i + 1 < args.count {
                 i += 1
                 let lvlStr = args[i].lowercased()
@@ -163,7 +218,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } else if (arg == "-o" || arg == "--output") && i + 1 < args.count {
                 i += 1
-                customOutput = URL(fileURLWithPath: args[i])
+                rawCustomOutput = args[i]
             } else if arg == "--overwrite" {
                 conflictStrategy = .overwrite
             } else if arg == "--skip" {
@@ -196,18 +251,59 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         isCommandLineInvocation = true
-        let urls = filePaths.map { URL(fileURLWithPath: $0) }
+        
+        var urls: [URL] = []
+        for rawPath in filePaths {
+            do {
+                let resolved = try PathSecurity.resolveInputFileURL(rawPath, baseDirectory: initialWorkingDirectory)
+                urls.append(resolved)
+            } catch {
+                fputs("UpackX Error: \(error.localizedDescription)\n", stderr)
+                exit(1)
+            }
+        }
+        
+        var customOutputURL: URL? = nil
+        if let rawOut = rawCustomOutput {
+            do {
+                if isCompression {
+                    customOutputURL = try PathSecurity.resolveInputFileURL(rawOut, baseDirectory: initialWorkingDirectory)
+                } else {
+                    customOutputURL = try PathSecurity.resolveDestinationDirectoryURL(rawOut, baseDirectory: initialWorkingDirectory)
+                }
+            } catch {
+                fputs("UpackX Output Path Error: \(error.localizedDescription)\n", stderr)
+                exit(1)
+            }
+        }
         
         if isCompression {
-            if isQuick || isHeadless {
-                startQuickCompression(sources: urls, explicitDestination: customOutput, level: compressionLevel, conflictStrategy: conflictStrategy)
+            if isQuick || isHeadless || customOutputURL != nil {
+                startQuickCompression(sources: urls, explicitDestination: customOutputURL, level: compressionLevel, conflictStrategy: conflictStrategy)
             } else {
                 showCompressToDialog(sources: urls)
             }
         } else {
             let tasks = MultipartDetector.groupArchives(urls)
-            if isQuick {
-                startSequentialExtraction(tasks: tasks, explicitConflictStrategy: conflictStrategy, customDestination: customOutput)
+            if let customDest = customOutputURL {
+                // Explicit destination directory provided via -o / --output
+                startSequentialExtraction(
+                    tasks: tasks,
+                    explicitConflictStrategy: conflictStrategy,
+                    customDestination: customDest,
+                    createEnclosingFolder: createEnclosingFolder
+                )
+            } else if isQuick || (explicitQuickFlag && customOutputURL == nil) {
+                // Quick Extract: strictly beside each archive, no enclosing folder
+                startQuickExtraction(tasks: tasks, explicitConflictStrategy: conflictStrategy)
+            } else if isHeadless {
+                // Headless --extract-to without -o defaults to each archive's parent directory
+                startSequentialExtraction(
+                    tasks: tasks,
+                    explicitConflictStrategy: conflictStrategy,
+                    customDestination: nil,
+                    createEnclosingFolder: createEnclosingFolder
+                )
             } else {
                 showExtractToDialogForTasks(tasks)
             }
@@ -219,13 +315,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func application(_ application: NSApplication, openFiles filenames: [String]) {
         guard !isCommandLineInvocation else { return }
         self.isRightClickInvocation = true
-        let urls = filenames.map { URL(fileURLWithPath: $0) }
+        let urls = filenames.map { PathSecurity.normalizeFileURL(URL(fileURLWithPath: $0)) }
         
         // If all items are recognized archives, extract. Otherwise, compress.
-        let allArchives = urls.allSatisfy { ArchiveFormat.detect(from: $0) != .unknown }
+        let allArchives = urls.allSatisfy { ArchiveFormat.detect(from: $0) != .unknown || MultipartDetector.detectMultipartType(from: $0) != .none }
         if allArchives {
             let tasks = MultipartDetector.groupArchives(urls)
-            startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
+            startQuickExtraction(tasks: tasks, explicitConflictStrategy: nil)
         } else {
             startQuickCompression(sources: urls)
         }
@@ -243,7 +339,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let tasks = MultipartDetector.groupArchives(urls)
-        startSequentialExtraction(tasks: tasks, explicitConflictStrategy: nil)
+        startQuickExtraction(tasks: tasks, explicitConflictStrategy: nil)
     }
     
     @objc public func extractToService(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
@@ -287,22 +383,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [
             NSPasteboard.ReadingOptionKey.urlReadingFileURLsOnly: true
         ]) as? [URL], !urls.isEmpty {
-            return urls
+            return urls.map { PathSecurity.normalizeFileURL($0) }
         }
         if let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
-            return urls
+            return urls.map { PathSecurity.normalizeFileURL($0) }
         }
         let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
-        if let files = pboard.propertyList(forType: filenamesType) as? [String] {
-            return files.map { URL(fileURLWithPath: $0) }
+        if let files = pboard.propertyList(forType: filenamesType) as? [String], !files.isEmpty {
+            return files.map { PathSecurity.normalizeFileURL(URL(fileURLWithPath: $0)) }
         }
         if let items = pboard.pasteboardItems {
             var results: [URL] = []
             for item in items {
                 if let string = item.string(forType: .fileURL), let url = URL(string: string) {
-                    results.append(url)
+                    results.append(PathSecurity.normalizeFileURL(url))
                 } else if let string = item.string(forType: filenamesType) {
-                    results.append(URL(fileURLWithPath: string))
+                    results.append(PathSecurity.normalizeFileURL(URL(fileURLWithPath: string)))
                 }
             }
             if !results.isEmpty {
@@ -315,57 +411,68 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Compression Workflows
     
     public func startQuickCompression(
-        sources: [URL],
+        sources rawSources: [URL],
         explicitDestination: URL? = nil,
         level: CompressionLevel = .normal,
         conflictStrategy: ConflictStrategy? = nil
     ) {
+        let sources = rawSources.map { PathSecurity.normalizeFileURL($0) }
         guard !sources.isEmpty else {
             checkTerminationIfNeeded()
             return
         }
         
-        let firstSource = sources[0]
-        let parentDir = firstSource.deletingLastPathComponent()
-        let defaultArchiveName: String
-        if sources.count == 1 {
-            let base = firstSource.deletingPathExtension().lastPathComponent
-            defaultArchiveName = base.isEmpty ? "Archive.zip" : "\(base).zip"
+        let parentDir = PathSecurity.defaultCompressionDirectory(for: sources)
+        let defaultArchiveName = PathSecurity.defaultArchiveFileName(for: sources)
+        
+        let targetDest: URL
+        if let explicit = explicitDestination {
+            let normExplicit = PathSecurity.normalizeFileURL(explicit)
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: normExplicit.path, isDirectory: &isDir)
+            if (exists && isDir.boolValue && normExplicit.pathExtension.lowercased() != "zip") || explicit.hasDirectoryPath {
+                targetDest = PathSecurity.normalizeDirectoryURL(normExplicit).appendingPathComponent(defaultArchiveName, isDirectory: false)
+            } else {
+                targetDest = normExplicit
+            }
         } else {
-            defaultArchiveName = "Archive.zip"
+            targetDest = parentDir.appendingPathComponent(defaultArchiveName, isDirectory: false)
         }
         
-        let targetDest = explicitDestination ?? parentDir.appendingPathComponent(defaultArchiveName)
-        let strategy = conflictStrategy ?? (isHeadless ? .rename : .rename)
+        let strategy = conflictStrategy ?? .rename
         
+        let nonInteractiveCLI = isHeadless || (isCommandLineInvocation && !isInteractiveDialogSession)
         let options = CompressionOptions(
             destinationURL: targetDest,
             compressionLevel: level,
             conflictStrategy: strategy,
-            conflictResolver: isHeadless ? nil : { ConflictDialog.prompt(for: $0) }
+            conflictResolver: nonInteractiveCLI ? nil : { ConflictDialog.prompt(for: $0) }
         )
         
         executeCompression(sources: sources, options: options)
     }
     
-    public func showCompressToDialog(sources: [URL]) {
+    public func showCompressToDialog(sources rawSources: [URL]) {
+        let sources = rawSources.map { PathSecurity.normalizeFileURL($0) }
         guard !sources.isEmpty else {
             checkTerminationIfNeeded()
             return
         }
+        isInteractiveDialogSession = true
         
         let dialog = CompressToWindowController(sources: sources)
         self.compressToController = dialog
         
         dialog.onConfirm = { [weak self] destinationURL, level in
-            self?.compressToController = nil
+            guard let self = self else { return }
+            self.compressToController = nil
             let options = CompressionOptions(
-                destinationURL: destinationURL,
+                destinationURL: PathSecurity.normalizeFileURL(destinationURL),
                 compressionLevel: level,
                 conflictStrategy: .ask,
                 conflictResolver: { ConflictDialog.prompt(for: $0) }
             )
-            self?.executeCompression(sources: sources, options: options)
+            self.executeCompression(sources: sources, options: options)
         }
         
         dialog.onCancel = { [weak self] in
@@ -378,6 +485,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func executeCompression(sources: [URL], options: CompressionOptions) {
+        activeCompressionCount += 1
+        
         let displayName: String
         if sources.count == 1 {
             displayName = sources[0].lastPathComponent
@@ -414,6 +523,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.async {
                         progressWC?.close()
                         self?.activeProgressWC = nil
+                        self?.activeCompressionCount = max(0, (self?.activeCompressionCount ?? 1) - 1)
                         
                         switch result {
                         case .success(let compResult):
@@ -457,25 +567,68 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     // MARK: - Queue & Extraction Workflows
     
+    /// Starts Quick Extract for one or more archive tasks.
+    /// Strictly independent: each archive extracts directly beside itself with `createEnclosingFolder = false`,
+    /// never inheriting any custom destination or enclosing folder state from prior operations.
+    public func startQuickExtraction(
+        tasks: [ExtractionTaskItem],
+        explicitConflictStrategy: ConflictStrategy? = nil
+    ) {
+        let jobs = tasks.map { task in
+            ExtractionQueueJob(
+                task: task,
+                destinationMode: .quickBesideArchive,
+                conflictStrategy: explicitConflictStrategy
+            )
+        }
+        enqueueExtractionJobs(jobs)
+    }
+    
+    /// Starts extraction for a batch of tasks with explicit destination and enclosing folder options.
     public func startSequentialExtraction(
         tasks: [ExtractionTaskItem],
         explicitConflictStrategy: ConflictStrategy?,
         customDestination: URL? = nil,
         createEnclosingFolder: Bool = false
     ) {
-        guard !tasks.isEmpty else {
+        let jobs = tasks.map { task -> ExtractionQueueJob in
+            let mode: ExtractionDestinationMode
+            if let customDest = customDestination {
+                mode = .customDirectory(PathSecurity.normalizeDirectoryURL(customDest), createEnclosingFolder: createEnclosingFolder)
+            } else if createEnclosingFolder {
+                let archiveDir = PathSecurity.defaultExtractionDirectory(for: task.archiveURL)
+                mode = .customDirectory(archiveDir, createEnclosingFolder: true)
+            } else {
+                mode = .quickBesideArchive
+            }
+            return ExtractionQueueJob(
+                task: task,
+                destinationMode: mode,
+                conflictStrategy: explicitConflictStrategy
+            )
+        }
+        enqueueExtractionJobs(jobs)
+    }
+    
+    public func enqueueExtractionJobs(_ jobs: [ExtractionQueueJob]) {
+        guard !jobs.isEmpty else {
             checkTerminationIfNeeded()
             return
         }
         
-        self.taskQueue = tasks
+        if isProcessingExtractionQueue {
+            // Append independent jobs to active queue without altering any existing job's destination mode
+            self.taskQueue.append(contentsOf: jobs)
+            return
+        }
+        
+        self.taskQueue = jobs
         self.currentTaskIndex = 0
-        self.queueConflictStrategy = explicitConflictStrategy
-        self.queueCustomDestination = customDestination
-        self.queueCreateEnclosing = createEnclosingFolder
         self.completedCount = 0
         self.failedCount = 0
         self.isCancelled = false
+        self.lastDestinationURL = nil
+        self.isProcessingExtractionQueue = true
         
         processNextQueueItem()
     }
@@ -491,8 +644,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        let task = taskQueue[currentTaskIndex]
-        let archiveURL = task.archiveURL
+        let job = taskQueue[currentTaskIndex]
+        let task = job.task
+        let archiveURL = PathSecurity.normalizeFileURL(task.archiveURL)
         let total = taskQueue.count
         
         // 1. Multipart integrity validation
@@ -538,16 +692,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.isCancelled = true
         }
         
-        // 3. Configure extraction options
-        let destDir = queueCustomDestination ?? archiveURL.deletingLastPathComponent()
-        let strategy = queueConflictStrategy ?? (isCommandLineInvocation && isHeadless ? .skip : .ask)
+        // 3. Configure extraction options strictly from the job's own destinationMode
+        let destDir: URL
+        let createEnclosing: Bool
+        switch job.destinationMode {
+        case .quickBesideArchive:
+            destDir = PathSecurity.defaultExtractionDirectory(for: archiveURL)
+            createEnclosing = false
+        case .customDirectory(let customDir, let enclosing):
+            destDir = PathSecurity.normalizeDirectoryURL(customDir)
+            createEnclosing = enclosing
+        }
+        
+        let nonInteractiveCLI = isHeadless || (isCommandLineInvocation && !isInteractiveDialogSession)
+        let strategy = job.conflictStrategy ?? (nonInteractiveCLI ? .skip : .ask)
         
         let options = ExtractionOptions(
             destinationDirectory: destDir,
-            createEnclosingFolder: queueCreateEnclosing,
+            createEnclosingFolder: createEnclosing,
             conflictStrategy: strategy,
-            conflictResolver: isHeadless ? nil : { ConflictDialog.prompt(for: $0) },
-            passwordProvider: isHeadless ? nil : { PasswordDialog.prompt(for: archiveURL) }
+            conflictResolver: nonInteractiveCLI ? nil : { ConflictDialog.prompt(for: $0) },
+            passwordProvider: nonInteractiveCLI ? nil : { PasswordDialog.prompt(for: archiveURL) }
         )
         
         ExtractionManager.shared.execute(
@@ -611,7 +776,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationHelper.shared.notifyBatchSummary(completed: completedCount, failed: failedCount, lastDestinationURL: lastDestinationURL)
         }
         
+        isProcessingExtractionQueue = false
         taskQueue.removeAll()
+        currentTaskIndex = 0
+        lastDestinationURL = nil
         checkTerminationIfNeeded()
     }
     
@@ -620,16 +788,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             checkTerminationIfNeeded()
             return
         }
+        isInteractiveDialogSession = true
         
         let dialog = ExtractToWindowController(archiveURL: firstTask.archiveURL, totalArchives: tasks.count)
         self.extractToController = dialog
         
         dialog.onConfirm = { [weak self] options in
-            self?.extractToController = nil
-            self?.startSequentialExtraction(
+            guard let self = self else { return }
+            self.extractToController = nil
+            self.startSequentialExtraction(
                 tasks: tasks,
                 explicitConflictStrategy: options.conflictStrategy,
-                customDestination: options.destinationDirectory,
+                customDestination: PathSecurity.normalizeDirectoryURL(options.destinationDirectory),
                 createEnclosingFolder: options.createEnclosingFolder
             )
         }
@@ -644,7 +814,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func checkTerminationIfNeeded() {
+        guard !suppressAutoTerminationForTesting else { return }
         if (isCommandLineInvocation || isServiceInvocation || isRightClickInvocation) &&
+            !isProcessingExtractionQueue &&
+            activeCompressionCount == 0 &&
             activeProgressWC == nil &&
             extractToController == nil &&
             compressToController == nil &&
@@ -717,11 +890,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc public func showAboutWindow() {
-        let credits = NSMutableAttributedString(string: "UpackX — Trình nén & giải nén Native Intel x86_64 cho macOS\nBản quyền © 2026 UpackX. All rights reserved.")
+        let credits = NSMutableAttributedString(string: "UpackX — Trình nén & giải nén Native cho macOS\nBản quyền © 2026 UpackX. All rights reserved.")
         let options: [NSApplication.AboutPanelOptionKey: Any] = [
             .applicationName: "UpackX",
             .applicationVersion: UpdateManager.shared.currentVersionString,
-            .version: "\(UpdateManager.shared.currentVersionString) (Build 5)",
+            .version: "\(UpdateManager.shared.currentVersionString) (Build 7)",
             .credits: credits
         ]
         NSApp.orderFrontStandardAboutPanel(options)

@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 public final class MainWindowController: NSWindowController, NSWindowDelegate {
     public var onFileSelected: ((URL, Bool) -> Void)? // Extraction: URL, isQuickExtract
+    public var onFilesSelected: (([URL], Bool) -> Void)? // Multi-archive Extraction: URLs, isQuickExtract
     public var onCompressSelected: (([URL], Bool) -> Void)? // Compression: URLs, isQuickCompress
     
     private let dropZone = DropZoneView()
@@ -43,8 +44,11 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
         
         // Drop zone view
         dropZone.frame = NSRect(x: 24, y: 120, width: 452, height: 210)
+        dropZone.onFilesDropped = { [weak self] urls in
+            self?.handleDroppedItems(urls)
+        }
         dropZone.onFileDropped = { [weak self] url in
-            self?.handleDroppedItem(url)
+            self?.handleDroppedItems([url])
         }
         contentView.addSubview(dropZone)
         
@@ -112,11 +116,12 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.prompt = "Chọn file giải nén"
         
-        if panel.runModal() == .OK, let url = panel.url {
-            promptExtractAction(for: url)
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            let normalized = panel.urls.map { PathSecurity.normalizeFileURL($0) }
+            promptExtractAction(for: normalized)
         }
     }
     
@@ -128,7 +133,8 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
         panel.prompt = "Chọn mục nén"
         
         if panel.runModal() == .OK, !panel.urls.isEmpty {
-            promptCompressAction(for: panel.urls)
+            let normalized = panel.urls.map { PathSecurity.normalizeFileURL($0) }
+            promptCompressAction(for: normalized)
         }
     }
     
@@ -196,18 +202,27 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
     }
     
-    private func handleDroppedItem(_ url: URL) {
-        let isArchive = ArchiveFormat.detect(from: url) != .unknown
-        if isArchive {
-            promptExtractAction(for: url)
+    private func handleDroppedItems(_ rawURLs: [URL]) {
+        let urls = rawURLs.map { PathSecurity.normalizeFileURL($0) }
+        guard !urls.isEmpty else { return }
+        let allArchives = urls.allSatisfy { url in
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            if exists && isDir.boolValue { return false }
+            return ArchiveFormat.detect(from: url) != .unknown || MultipartDetector.detectMultipartType(from: url) != .none
+        }
+        if allArchives {
+            promptExtractAction(for: urls)
         } else {
-            promptCompressAction(for: [url])
+            promptCompressAction(for: urls)
         }
     }
     
-    private func promptExtractAction(for url: URL) {
+    private func promptExtractAction(for urls: [URL]) {
+        guard let first = urls.first else { return }
         let alert = NSAlert()
-        alert.messageText = "Giải nén: \(url.lastPathComponent)"
+        let displayName = urls.count == 1 ? first.lastPathComponent : "\(urls.count) archive"
+        alert.messageText = "Giải nén: \(displayName)"
         alert.informativeText = "Chọn hình thức giải nén mong muốn:"
         alert.addButton(withTitle: "Giải nén nhanh")
         alert.addButton(withTitle: "Giải nén… (Tùy chọn)")
@@ -215,9 +230,17 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
         
         let res = alert.runModal()
         if res == .alertFirstButtonReturn {
-            onFileSelected?(url, true)
+            if let handler = onFilesSelected {
+                handler(urls, true)
+            } else {
+                onFileSelected?(first, true)
+            }
         } else if res == .alertSecondButtonReturn {
-            onFileSelected?(url, false)
+            if let handler = onFilesSelected {
+                handler(urls, false)
+            } else {
+                onFileSelected?(first, false)
+            }
         }
     }
     
@@ -243,6 +266,7 @@ public final class MainWindowController: NSWindowController, NSWindowDelegate {
 
 public final class DropZoneView: NSView {
     public var onFileDropped: ((URL) -> Void)?
+    public var onFilesDropped: (([URL]) -> Void)?
     private var isHighlighted: Bool = false
     
     public override init(frame frameRect: NSRect) {
@@ -306,12 +330,18 @@ public final class DropZoneView: NSView {
         layer?.backgroundColor = nil
         needsDisplay = true
         
-        guard let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-              let first = items.first else {
+        guard let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ??
+                          sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+              !items.isEmpty else {
             return false
         }
         
-        onFileDropped?(first)
+        let normalized = items.map { PathSecurity.normalizeFileURL($0) }
+        if let multiHandler = onFilesDropped {
+            multiHandler(normalized)
+        } else if let first = normalized.first {
+            onFileDropped?(first)
+        }
         return true
     }
 }

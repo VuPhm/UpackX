@@ -5,6 +5,8 @@ public final class FinderIntegrationManager {
     public static let shared = FinderIntegrationManager()
     
     public let servicesDirectory: URL
+    public static let canonicalApplicationsBundlePath = "/Applications/UpackX.app"
+    public static let lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     
     public static let expectedServiceNames = [
         "Giải nén nhanh với UpackX",
@@ -19,7 +21,8 @@ public final class FinderIntegrationManager {
     }
     
     public var isInstalledInApplications: Bool {
-        return Bundle.main.bundlePath == "/Applications/UpackX.app" || FileManager.default.fileExists(atPath: "/Applications/UpackX.app")
+        return Bundle.main.bundlePath == Self.canonicalApplicationsBundlePath ||
+               FileManager.default.fileExists(atPath: Self.canonicalApplicationsBundlePath)
     }
     
     /// Removes any legacy Automator workflows (.workflow) to prevent duplicate context menus
@@ -33,6 +36,61 @@ public final class FinderIntegrationManager {
                 try? fm.removeItem(at: fullPath)
             }
         }
+    }
+    
+    /// Unregisters non-canonical UpackX bundles (such as build/ or mounted DMGs) from LaunchServices
+    /// when `/Applications/UpackX.app` is installed, ensuring Finder Services always route to `/Applications/UpackX.app`.
+    public func cleanDuplicateLaunchServicesRegistrations() {
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: Self.lsregisterPath),
+              fm.fileExists(atPath: Self.canonicalApplicationsBundlePath) else {
+            return
+        }
+        
+        // Discover any UpackX bundles indexed by Spotlight
+        let mdfind = Process()
+        mdfind.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+        mdfind.arguments = ["kMDItemCFBundleIdentifier == 'com.upackx.extractor'"]
+        let pipe = Pipe()
+        mdfind.standardOutput = pipe
+        mdfind.standardError = Pipe()
+        
+        var candidatePaths: Set<String> = []
+        if (try? mdfind.run()) != nil {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            mdfind.waitUntilExit()
+            if let output = String(data: data, encoding: .utf8) {
+                for line in output.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty && trimmed != Self.canonicalApplicationsBundlePath {
+                        candidatePaths.insert(trimmed)
+                    }
+                }
+            }
+        }
+        
+        let currentBundle = Bundle.main.bundlePath
+        if currentBundle.hasSuffix(".app") && currentBundle != Self.canonicalApplicationsBundlePath {
+            candidatePaths.insert(currentBundle)
+        }
+        
+        for stalePath in candidatePaths {
+            let unreg = Process()
+            unreg.executableURL = URL(fileURLWithPath: Self.lsregisterPath)
+            unreg.arguments = ["-u", stalePath]
+            unreg.standardOutput = Pipe()
+            unreg.standardError = Pipe()
+            try? unreg.run()
+            unreg.waitUntilExit()
+        }
+        
+        let reg = Process()
+        reg.executableURL = URL(fileURLWithPath: Self.lsregisterPath)
+        reg.arguments = ["-f", Self.canonicalApplicationsBundlePath]
+        reg.standardOutput = Pipe()
+        reg.standardError = Pipe()
+        try? reg.run()
+        reg.waitUntilExit()
     }
     
     /// Checks whether all 4 NSServices are declared in the application's Info.plist
@@ -51,6 +109,7 @@ public final class FinderIntegrationManager {
     @discardableResult
     public func refreshServices() -> Bool {
         cleanLegacyWorkflows()
+        cleanDuplicateLaunchServicesRegistrations()
         // Standard AppKit API notifying macOS that dynamic services have updated
         NSUpdateDynamicServices()
         return true

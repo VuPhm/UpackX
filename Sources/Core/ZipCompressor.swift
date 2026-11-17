@@ -38,64 +38,169 @@ public final class ZipCompressor {
     /// Compresses one or more source files/directories into a ZIP archive
     @discardableResult
     public func compress(
-        sources: [URL],
+        sources rawSources: [URL],
         options: CompressionOptions,
         progress: ((CompressionProgress) -> Bool)? = nil,
         completion: @escaping (Result<CompressionResult, CompressionError>) -> Void
     ) -> Bool {
+        let sources = Self.normalizeAndDeduplicateSources(rawSources)
         guard !sources.isEmpty else {
             completion(.failure(.emptySource))
             return false
         }
         
         let startTime = Date()
-        var finalDestinationURL = options.destinationURL
+        let originalDestinationURL = PathSecurity.normalizeFileURL(options.destinationURL)
+        var finalDestinationURL = originalDestinationURL
         let fm = FileManager.default
         
-        // 1. Conflict resolution if destination already exists
-        if fm.fileExists(atPath: finalDestinationURL.path) {
-            var strategy = options.conflictStrategy
-            if strategy == .ask {
-                if let resolver = options.conflictResolver {
-                    let decision = resolver(finalDestinationURL)
-                    switch decision.action {
-                    case .overwrite:
-                        strategy = .overwrite
-                    case .rename:
-                        strategy = .rename
-                    case .skip:
-                        strategy = .skip
-                    case .cancel:
-                        completion(.failure(.cancelled))
-                        return false
-                    }
+        // 1. Conflict resolution if destination already exists (including symlinks)
+        var isExistingDestDir: ObjCBool = false
+        var isExistingDestSymlink: Bool = false
+        if PathSecurity.itemExistsIncludingSymlink(at: finalDestinationURL, isDirectory: &isExistingDestDir, isSymlink: &isExistingDestSymlink) {
+            if isExistingDestDir.boolValue && !isExistingDestSymlink {
+                // Destination path is an existing real directory: NEVER overwrite or delete a user directory!
+                if options.conflictStrategy == .overwrite {
+                    completion(.failure(.cannotCreateArchive("Đường dẫn đích '\(finalDestinationURL.path)' là một thư mục đang tồn tại, không thể ghi đè bằng file nén.")))
+                    return false
                 } else {
-                    strategy = .rename
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
                 }
-            }
-            
-            switch strategy {
-            case .overwrite:
-                break // Will replace atomically on completion
-            case .rename:
-                finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
-            case .skip:
-                let result = CompressionResult(
-                    destinationURL: finalDestinationURL,
-                    totalItemsCompressed: 0,
-                    totalBytesProcessed: 0,
-                    archiveSize: 0,
-                    elapsedTime: 0
-                )
-                completion(.success(result))
-                return true
-            case .ask:
-                finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
+            } else {
+                var strategy = options.conflictStrategy
+                if strategy == .ask {
+                    if let resolver = options.conflictResolver {
+                        let decision = resolver(finalDestinationURL)
+                        switch decision.action {
+                        case .overwrite:
+                            strategy = .overwrite
+                        case .rename:
+                            strategy = .rename
+                        case .skip:
+                            strategy = .skip
+                        case .cancel:
+                            completion(.failure(.cancelled))
+                            return false
+                        }
+                    } else {
+                        strategy = .rename
+                    }
+                }
+                
+                switch strategy {
+                case .overwrite:
+                    break // Will replace atomically on completion
+                case .rename:
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
+                case .skip:
+                    let result = CompressionResult(
+                        destinationURL: finalDestinationURL,
+                        totalItemsCompressed: 0,
+                        totalBytesProcessed: 0,
+                        archiveSize: 0,
+                        elapsedTime: 0
+                    )
+                    completion(.success(result))
+                    return true
+                case .ask:
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: finalDestinationURL)
+                }
             }
         }
         
-        // 2. Prepare staging output directory & temporary file
         let destDir = finalDestinationURL.deletingLastPathComponent()
+        
+        // Validate that destDir is not an existing regular file
+        var isDestParentDir: ObjCBool = false
+        var isDestParentSymlink: Bool = false
+        if PathSecurity.itemExistsIncludingSymlink(at: destDir, isDirectory: &isDestParentDir, isSymlink: &isDestParentSymlink) {
+            if isDestParentSymlink {
+                var resolvedIsDir: ObjCBool = false
+                if !fm.fileExists(atPath: destDir.path, isDirectory: &resolvedIsDir) || !resolvedIsDir.boolValue {
+                    completion(.failure(.cannotCreateArchive("Thư mục lưu '\(destDir.path)' là một symlink không hợp lệ.")))
+                    return false
+                }
+            } else if !isDestParentDir.boolValue {
+                completion(.failure(.cannotCreateArchive("Đường dẫn thư mục lưu '\(destDir.path)' là một tệp tin, không phải thư mục.")))
+                return false
+            }
+        }
+        
+        let destDirExistedBefore = fm.fileExists(atPath: destDir.path)
+        let tempFileName = ".upackx_compress_" + UUID().uuidString + ".tmp"
+        let tempURL = destDir.appendingPathComponent(tempFileName)
+        
+        let canonicalOriginalDest = PathSecurity.canonicalPath(for: originalDestinationURL, followSymlinks: false).precomposedStringWithCanonicalMapping
+        let canonicalDest = PathSecurity.canonicalPath(for: finalDestinationURL, followSymlinks: false).precomposedStringWithCanonicalMapping
+        let canonicalTemp = PathSecurity.canonicalPath(for: tempURL, followSymlinks: false).precomposedStringWithCanonicalMapping
+        let excludedCanonicalPaths: Set<String> = [canonicalOriginalDest, canonicalDest, canonicalTemp]
+        
+        // 2. Scan and collect items to archive BEFORE creating destDir on disk.
+        // This guarantees that if destDir is a new subfolder inside a source directory, it is never self-included,
+        // and if source validation fails, no unwanted destination directory is created.
+        var itemsToCompress: [CompressItem] = []
+        var totalBytesToProcess: Int64 = 0
+        var usedRootNames: Set<String> = []
+        
+        for source in sources {
+            var isSourceDir: ObjCBool = false
+            var isSourceSymlink: Bool = false
+            guard PathSecurity.itemExistsIncludingSymlink(at: source, isDirectory: &isSourceDir, isSymlink: &isSourceSymlink) else {
+                completion(.failure(.sourceNotFound(source.path)))
+                return false
+            }
+            
+            // If source is a symlink to a directory, check if user selected a directory symlink directly
+            var treatAsDirectory = isSourceDir.boolValue
+            if isSourceSymlink {
+                // For a top-level symlink selected directly as a source:
+                // Only treat as directory if it's a real directory, otherwise archive the symlink or check readability
+                treatAsDirectory = false
+            }
+            
+            if !isSourceSymlink {
+                guard fm.isReadableFile(atPath: source.path) else {
+                    completion(.failure(.permissionDenied(source.path)))
+                    return false
+                }
+            }
+            
+            let baseItemName = Self.uniqueTopLevelArchiveName(for: source.lastPathComponent, usedNames: &usedRootNames)
+            
+            do {
+                if treatAsDirectory {
+                    try collectItems(
+                        from: source,
+                        relativePrefix: baseItemName,
+                        excludedCanonicalPaths: excludedCanonicalPaths,
+                        into: &itemsToCompress,
+                        totalBytes: &totalBytesToProcess
+                    )
+                } else {
+                    if let item = try makeCompressItem(
+                        for: source,
+                        archivePath: baseItemName,
+                        excludedCanonicalPaths: excludedCanonicalPaths
+                    ) {
+                        itemsToCompress.append(item)
+                        totalBytesToProcess += item.fileSize
+                    }
+                }
+            } catch let error as CompressionError {
+                completion(.failure(error))
+                return false
+            } catch {
+                completion(.failure(.traversalFailed(path: source.path, reason: error.localizedDescription)))
+                return false
+            }
+        }
+        
+        guard !itemsToCompress.isEmpty else {
+            completion(.failure(.emptySource))
+            return false
+        }
+        
+        // 3. Prepare output directory now that sources are validated and collected
         if !fm.fileExists(atPath: destDir.path) {
             do {
                 try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
@@ -105,90 +210,18 @@ public final class ZipCompressor {
             }
         }
         
-        let tempFileName = ".upackx_compress_" + UUID().uuidString + ".tmp"
-        let tempURL = destDir.appendingPathComponent(tempFileName)
-        
-        let canonicalDest = PathSecurity.canonicalPath(for: finalDestinationURL)
-        let canonicalTemp = PathSecurity.canonicalPath(for: tempURL)
-        
-        // 3. Scan and collect items to archive with strict error reporting
-        var itemsToCompress: [CompressItem] = []
-        var totalBytesToProcess: Int64 = 0
-        
-        let isSingleDirectory = (sources.count == 1 && (try? sources[0].resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true)
-        
-        for source in sources {
-            guard fm.fileExists(atPath: source.path) else {
-                cleanup(tempURL: tempURL)
-                completion(.failure(.sourceNotFound(source.path)))
-                return false
-            }
-            
-            // Check read permission on source
-            guard fm.isReadableFile(atPath: source.path) else {
-                cleanup(tempURL: tempURL)
-                completion(.failure(.permissionDenied(source.path)))
-                return false
-            }
-            
-            let isDir = (try? source.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            
-            do {
-                if isSingleDirectory {
-                    let rootDirName = source.lastPathComponent
-                    try collectItems(
-                        from: source,
-                        relativePrefix: rootDirName,
-                        canonicalDest: canonicalDest,
-                        canonicalTemp: canonicalTemp,
-                        into: &itemsToCompress,
-                        totalBytes: &totalBytesToProcess
-                    )
-                } else if isDir {
-                    let dirName = source.lastPathComponent
-                    try collectItems(
-                        from: source,
-                        relativePrefix: dirName,
-                        canonicalDest: canonicalDest,
-                        canonicalTemp: canonicalTemp,
-                        into: &itemsToCompress,
-                        totalBytes: &totalBytesToProcess
-                    )
-                } else {
-                    // Single file or symlink
-                    let fileName = source.lastPathComponent
-                    if let item = try makeCompressItem(for: source, archivePath: fileName, canonicalDest: canonicalDest, canonicalTemp: canonicalTemp) {
-                        itemsToCompress.append(item)
-                        totalBytesToProcess += item.fileSize
-                    }
-                }
-            } catch let error as CompressionError {
-                cleanup(tempURL: tempURL)
-                completion(.failure(error))
-                return false
-            } catch {
-                cleanup(tempURL: tempURL)
-                completion(.failure(.traversalFailed(path: source.path, reason: error.localizedDescription)))
-                return false
-            }
-        }
-        
-        guard !itemsToCompress.isEmpty else {
-            cleanup(tempURL: tempURL)
-            completion(.failure(.emptySource))
-            return false
-        }
+        let createdDestDirToClean: URL? = destDirExistedBefore ? nil : destDir
         
         // 4. Initialize libarchive writer
         guard let a = archive_write_new() else {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.cannotCreateArchive("Không thể cấp phát bộ nhớ cho archive writer.")))
             return false
         }
         
         guard archive_write_set_format_zip(a) == ARCHIVE_OK else {
             _ = archive_write_free(a)
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.cannotCreateArchive("Không thể thiết lập định dạng ZIP.")))
             return false
         }
@@ -198,7 +231,7 @@ public final class ZipCompressor {
         if optRes < ARCHIVE_WARN {
             let errString = archive_error_string(a).map { String(cString: $0) } ?? "Lỗi thiết lập tùy chọn ZIP"
             _ = archive_write_free(a)
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.cannotCreateArchive(errString)))
             return false
         }
@@ -206,7 +239,7 @@ public final class ZipCompressor {
         guard archive_write_open_filename(a, tempURL.path) == ARCHIVE_OK else {
             let errString = archive_error_string(a).map { String(cString: $0) } ?? "Lỗi mở tệp lưu trữ"
             _ = archive_write_free(a)
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.cannotCreateArchive(errString)))
             return false
         }
@@ -416,54 +449,55 @@ public final class ZipCompressor {
         _ = archive_write_free(a)
         
         if isCancelled {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.cancelled))
             return false
         }
         
         if let err = writeLoopError {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(err))
             return false
         }
         
         #if DEBUG || canImport(Foundation)
         if ZipCompressorFaults.failClose {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.archiveCloseFailed("Fault injection: Archive close failure simulated.")))
             return false
         }
         #endif
         
         guard closeRes == ARCHIVE_OK || closeRes == ARCHIVE_WARN else {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.archiveCloseFailed("Lỗi ghi cấu trúc cuối của file ZIP (closeRes=\(closeRes)).")))
             return false
         }
         
         // Ensure all planned files were compressed
         guard processedFiles == totalFiles else {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.writeFailed("Số lượng tệp được nén (\(processedFiles)) không khớp với kế hoạch (\(totalFiles)).")))
             return false
         }
         
         // 7. Atomic Commit & Data Safety with Rollback Strategy
         guard fm.fileExists(atPath: tempURL.path) else {
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.writeFailed("Tệp nén tạm thời không tồn tại sau khi nén.")))
             return false
         }
         
         let tempSize = (try? fm.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? 0
         guard tempSize > 0 else {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.writeFailed("Tệp nén tạo ra rỗng (0 bytes).")))
             return false
         }
         
         #if DEBUG || canImport(Foundation)
         if ZipCompressorFaults.simulateCommitFailure {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.commitFailed("Fault injection: Simulated atomic commit failure.")))
             return false
         }
@@ -472,7 +506,7 @@ public final class ZipCompressor {
         do {
             try commitArchive(from: tempURL, to: finalDestinationURL, fileManager: fm)
         } catch {
-            cleanup(tempURL: tempURL)
+            cleanup(tempURL: tempURL, createdDestDir: createdDestDirToClean)
             completion(.failure(.commitFailed(error.localizedDescription)))
             return false
         }
@@ -492,30 +526,95 @@ public final class ZipCompressor {
         return true
     }
     
+    // MARK: - Source Deduplication & Top-Level Naming
+    
+    private static func normalizeAndDeduplicateSources(_ rawSources: [URL]) -> [URL] {
+        var uniqueSources: [URL] = []
+        var seenCanonical: Set<String> = []
+        
+        for raw in rawSources {
+            let normalized = PathSecurity.normalizeFileURL(raw)
+            let canonical = PathSecurity.canonicalPath(for: normalized, followSymlinks: false).precomposedStringWithCanonicalMapping
+            if !seenCanonical.contains(canonical) {
+                seenCanonical.insert(canonical)
+                uniqueSources.append(normalized)
+            }
+        }
+        
+        // Filter out any source that is strictly inside another directory in uniqueSources
+        var dirCanonicals: [String] = []
+        for src in uniqueSources {
+            var isDir: ObjCBool = false
+            var isLink: Bool = false
+            if PathSecurity.itemExistsIncludingSymlink(at: src, isDirectory: &isDir, isSymlink: &isLink),
+               isDir.boolValue && !isLink {
+                dirCanonicals.append(PathSecurity.canonicalPath(for: src, followSymlinks: true).precomposedStringWithCanonicalMapping)
+            }
+        }
+        
+        return uniqueSources.filter { src in
+            let itemCanonical = PathSecurity.canonicalPath(for: src, followSymlinks: false).precomposedStringWithCanonicalMapping
+            for dirCan in dirCanonicals {
+                if itemCanonical != dirCan && PathSecurity.isCanonicallyContained(path: itemCanonical, within: dirCan) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+    
+    private static func uniqueTopLevelArchiveName(for rawName: String, usedNames: inout Set<String>) -> String {
+        let baseName = rawName.isEmpty ? "Item" : rawName
+        var candidate = baseName
+        var counter = 1
+        while usedNames.contains(candidate.precomposedStringWithCanonicalMapping.lowercased()) {
+            let ext = (baseName as NSString).pathExtension
+            let stem = (baseName as NSString).deletingPathExtension
+            if ext.isEmpty || stem.isEmpty {
+                candidate = "\(baseName) (\(counter))"
+            } else {
+                candidate = "\(stem) (\(counter)).\(ext)"
+            }
+            counter += 1
+        }
+        usedNames.insert(candidate.precomposedStringWithCanonicalMapping.lowercased())
+        return candidate
+    }
+    
     // MARK: - Atomic Commit & Rollback
     
     private func commitArchive(from tempURL: URL, to destURL: URL, fileManager fm: FileManager) throws {
-        if !fm.fileExists(atPath: destURL.path) {
+        var isExistingDir: ObjCBool = false
+        var isExistingSymlink: Bool = false
+        let exists = PathSecurity.itemExistsIncludingSymlink(at: destURL, isDirectory: &isExistingDir, isSymlink: &isExistingSymlink)
+        
+        if exists && isExistingDir.boolValue && !isExistingSymlink {
+            throw CompressionError.commitFailed("Đường dẫn đích '\(destURL.path)' là một thư mục đang tồn tại.")
+        }
+        
+        if !exists {
             // Destination does not exist: direct atomic move
             try fm.moveItem(at: tempURL, to: destURL)
             return
         }
         
         // Destination ALREADY exists: Safe atomic replace with backup and rollback
-        // Attempt 1: Native filesystem atomic replacement
-        do {
-            var resultingURL: NSURL? = nil
-            try fm.replaceItem(
-                at: destURL,
-                withItemAt: tempURL,
-                backupItemName: nil,
-                options: [.withoutDeletingBackupItem],
-                resultingItemURL: &resultingURL
-            )
-            return
-        } catch {
-            // replaceItem failed (e.g. Google Drive File Provider, network drive, FAT32/exFAT).
-            // Fallback to Attempt 2: Staged Backup & Rollback
+        // Attempt 1: Native filesystem atomic replacement (only when not a symlink)
+        if !isExistingSymlink {
+            do {
+                var resultingURL: NSURL? = nil
+                try fm.replaceItem(
+                    at: destURL,
+                    withItemAt: tempURL,
+                    backupItemName: nil,
+                    options: [.withoutDeletingBackupItem],
+                    resultingItemURL: &resultingURL
+                )
+                return
+            } catch {
+                // replaceItem failed (e.g. Google Drive File Provider, network drive, FAT32/exFAT).
+                // Fallback to Attempt 2: Staged Backup & Rollback
+            }
         }
         
         let destDir = destURL.deletingLastPathComponent()
@@ -542,13 +641,12 @@ public final class ZipCompressor {
     private func collectItems(
         from directoryURL: URL,
         relativePrefix: String,
-        canonicalDest: String,
-        canonicalTemp: String,
+        excludedCanonicalPaths: Set<String>,
         into items: inout [CompressItem],
         totalBytes: inout Int64
     ) throws {
         let fm = FileManager.default
-        let canonicalDirPath = PathSecurity.canonicalPath(for: directoryURL)
+        let canonicalDirPath = PathSecurity.canonicalPath(for: directoryURL, followSymlinks: true)
         
         guard fm.isReadableFile(atPath: directoryURL.path) else {
             throw CompressionError.permissionDenied(directoryURL.path)
@@ -559,7 +657,8 @@ public final class ZipCompressor {
         let dirPerm = (dirAttributes[.posixPermissions] as? UInt16) ?? 0o755
         let dirMtime = (dirAttributes[.modificationDate] as? Date) ?? Date()
         
-        let normalizedDirPrefix = relativePrefix.hasSuffix("/") ? relativePrefix : (relativePrefix + "/")
+        let cleanPrefix = relativePrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedDirPrefix = cleanPrefix + "/"
         items.append(CompressItem(
             sourceURL: directoryURL,
             archivePath: normalizedDirPrefix,
@@ -591,7 +690,15 @@ public final class ZipCompressor {
                 throw CompressionError.traversalFailed(path: fileURL.path, reason: err.localizedDescription)
             }
             
-            let isLink = (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
+            let itemName = fileURL.lastPathComponent
+            if PathSecurity.isInternalStagingArtifact(name: itemName) {
+                continue
+            }
+            
+            var st = stat()
+            let hasStat = (lstat(fileURL.path, &st) == 0)
+            let isLink = hasStat ? ((st.st_mode & S_IFMT) == S_IFLNK) : ((try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false)
+            
             if !isLink {
                 // Check readability of regular file or directory
                 guard fm.isReadableFile(atPath: fileURL.path) else {
@@ -599,26 +706,28 @@ public final class ZipCompressor {
                 }
             }
             
-            let canonicalItem = PathSecurity.canonicalPath(for: fileURL, followSymlinks: false)
+            let canonicalItem = PathSecurity.canonicalPath(for: fileURL, followSymlinks: false).precomposedStringWithCanonicalMapping
             // Self-inclusion check: do not include destination archive or temp file
-            if canonicalItem == canonicalDest || canonicalItem == canonicalTemp || canonicalItem.hasPrefix(canonicalTemp + "/") {
+            if excludedCanonicalPaths.contains(canonicalItem) {
                 continue
             }
             
-            guard canonicalItem.hasPrefix(canonicalDirPath) else { continue }
-            let relativePathFromDir = canonicalItem.dropFirst(canonicalDirPath.count).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let relativePathFromDir = PathSecurity.relativePath(of: fileURL, from: directoryURL),
+                  !relativePathFromDir.isEmpty else {
+                continue
+            }
+            
             let archiveEntryPath = normalizedDirPrefix + relativePathFromDir
             
             // Validate POSIX file types: reject sockets, FIFOs, character/block devices
-            var st = stat()
-            if lstat(fileURL.path, &st) == 0 {
+            if hasStat {
                 let fileType = st.st_mode & S_IFMT
                 if fileType == S_IFSOCK || fileType == S_IFIFO || fileType == S_IFCHR || fileType == S_IFBLK {
                     throw CompressionError.unsupportedFileType(path: fileURL.path, type: fileTypeDescription(mode: st.st_mode))
                 }
             }
             
-            let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let isDir = hasStat ? ((st.st_mode & S_IFMT) == S_IFDIR) : ((try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false)
             
             if isLink {
                 let target = try? fm.destinationOfSymbolicLink(atPath: fileURL.path)
@@ -675,16 +784,22 @@ public final class ZipCompressor {
     private func makeCompressItem(
         for fileURL: URL,
         archivePath: String,
-        canonicalDest: String,
-        canonicalTemp: String
+        excludedCanonicalPaths: Set<String>
     ) throws -> CompressItem? {
-        let canonicalItem = PathSecurity.canonicalPath(for: fileURL, followSymlinks: false)
-        if canonicalItem == canonicalDest || canonicalItem == canonicalTemp {
+        if PathSecurity.isInternalStagingArtifact(name: fileURL.lastPathComponent) {
+            return nil
+        }
+        
+        let canonicalItem = PathSecurity.canonicalPath(for: fileURL, followSymlinks: false).precomposedStringWithCanonicalMapping
+        if excludedCanonicalPaths.contains(canonicalItem) {
             return nil
         }
         
         let fm = FileManager.default
-        let isLink = (try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
+        var st = stat()
+        let hasStat = (lstat(fileURL.path, &st) == 0)
+        let isLink = hasStat ? ((st.st_mode & S_IFMT) == S_IFLNK) : ((try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false)
+        
         if !isLink {
             guard fm.isReadableFile(atPath: fileURL.path) else {
                 throw CompressionError.permissionDenied(fileURL.path)
@@ -692,8 +807,7 @@ public final class ZipCompressor {
         }
         
         // Validate POSIX file types: reject sockets, FIFOs, character/block devices
-        var st = stat()
-        if lstat(fileURL.path, &st) == 0 {
+        if hasStat {
             let fileType = st.st_mode & S_IFMT
             if fileType == S_IFSOCK || fileType == S_IFIFO || fileType == S_IFCHR || fileType == S_IFBLK {
                 throw CompressionError.unsupportedFileType(path: fileURL.path, type: fileTypeDescription(mode: st.st_mode))
@@ -742,7 +856,13 @@ public final class ZipCompressor {
         }
     }
     
-    private func cleanup(tempURL: URL) {
-        try? FileManager.default.removeItem(at: tempURL)
+    private func cleanup(tempURL: URL, createdDestDir: URL? = nil) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: tempURL)
+        if let createdDir = createdDestDir {
+            if let contents = try? fm.contentsOfDirectory(atPath: createdDir.path), contents.isEmpty {
+                try? fm.removeItem(at: createdDir)
+            }
+        }
     }
 }

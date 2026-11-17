@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] — Hotfix: Path Resolution & Archive Structure
+
+### Đã sửa & Gia cố (Fixed & Hardened)
+- **Chuẩn hóa cơ chế xử lý đường dẫn thống nhất (`PathSecurity`):**
+  - Xử lý nhất quán đường dẫn mặc định, đường dẫn nhập tay, chọn qua `NSOpenPanel`, kéo thả thư mục và dán từ Clipboard (`Cmd+V` thư mục từ Finder, đường dẫn có dấu nháy `"..."`/`'...'`, `~`, `file://`, dấu `/` cuối, khoảng trắng thoát `\ ` và Unicode tiếng Việt).
+  - Loại bỏ hoàn toàn việc rơi ngầm về `currentDirectoryPath` (CWD) khi trường đường dẫn rỗng hoặc nhập đường dẫn tương đối không rõ gốc trong giao diện.
+  - Phân biệt rõ ràng `destinationDirectory` (thư mục đích) và `outputFileURL` (tệp ZIP đầu ra).
+- **Cô lập hoàn toàn trạng thái giữa Quick Extract và Extract To (`AppDelegate`, `ExtractionManager`):**
+  - Thiết kế `ExtractionDestinationMode` gắn trực tiếp vào từng tác vụ (`ExtractionQueueJob`). Quick Extract luôn giải nén độc lập ngay cạnh archive (`archiveURL.deletingLastPathComponent()`) với `createEnclosingFolder = false`, tuyệt đối không kế thừa thư mục đích hay tùy chọn từ lần giải nén trước.
+  - Sửa lỗi vòng đời cửa sổ (`applicationShouldTerminateAfterLastWindowClosed` & thứ tự đóng hộp thoại `ExtractToWindowController` / `CompressToWindowController`) ngăn ứng dụng tự thoát sớm khi bắt đầu tác vụ từ Finder Services.
+- **Loại bỏ triệt để thư mục bao ngoài trùng lặp (`Video/Video/`) khi giải nén & nén:**
+  - Khi bật `Tạo thư mục bao ngoài`, kiểm tra thông minh cấu trúc gốc của archive và tên thư mục đích trên cả `LibarchiveExtractor` và `SevenZipExtractor` để không tạo cấu trúc lặp `Folder/Folder/`.
+  - Khi tắt `Tạo thư mục bao ngoài` hoặc dùng Quick Extract, bảo toàn nguyên vẹn cấu trúc thư mục thực tế trong archive mà không tự ý thêm wrapper hay flatten thư mục gốc có thật.
+  - Xử lý chính xác tên cơ sở (`archiveBaseName`) đối với các định dạng đuôi kép (`.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tgz`) và bộ chia phần (`.part1.rar`, `.7z.001`, `.z01`).
+- **Chuẩn hóa tính năng nén (`ZipCompressor`, `CompressToWindowController`):**
+  - Giữ nguyên dấu chấm, khoảng trắng và Unicode trong tên thư mục khi đặt tên file nén mặc định (ví dụ: thư mục `Project v1.4.1` tạo `Project v1.4.1.zip` thay vì bị cắt thành `Project v1.4.zip`).
+  - Kiểm tra nghiêm ngặt tên file nén nhập tay: chặn ký tự phân cấp thư mục (`/`, `\`, `:`), tự động thu gọn đuôi lặp `.zip.zip`.
+  - Quét danh sách nguồn trước khi tạo thư mục đích mới để ngăn lỗi self-inclusion ngay cả khi lưu file ZIP vào một thư mục con mới bên trong chính thư mục nguồn.
+- **Tăng cường an toàn dữ liệu, Symlink & Multi-archive (`MultipartDetector`, `GoogleDriveHelper`):**
+  - Kiểm tra canonical containment theo ranh giới path component và kiểm tra `lstat` trên từng cấp thư mục trung gian để chặn tấn công Zip-Slip qua symlink (`symlink -> /tmp` kèm entry con) hoặc symlink tồn tại sẵn tại đích.
+  - Không bao giờ xóa thư mục chứa dữ liệu của người dùng khi xảy ra xung đột tên với file giải nén hoặc file ZIP đầu ra.
+  - Phân biệt khóa nhóm multipart theo cả đường dẫn thư mục cha và tên cơ sở, đảm bảo các bộ multipart trùng tên ở các thư mục khác nhau được giải nén độc lập.
+  - Làm sạch đăng ký LaunchServices trùng lặp (như bản build tạm trong `build/`), đảm bảo Finder Services luôn trỏ duy nhất tới `/Applications/UpackX.app`.
+
 ## [1.4.1] - 2026-11-09
 
 ### Chuẩn hóa & Nâng cấp (Release Readiness & Vietnamese-First)

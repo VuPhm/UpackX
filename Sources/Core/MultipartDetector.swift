@@ -51,8 +51,19 @@ public struct ExtractionTaskItem {
 
 public final class MultipartDetector {
     
+    private static func normalizeURL(_ url: URL) -> URL {
+        let resolvedRef = (url as NSURL).filePathURL ?? url
+        let standardized = resolvedRef.standardizedFileURL
+        return URL(fileURLWithPath: standardized.path)
+    }
+    
+    private static func normKey(_ s: String) -> String {
+        return s.precomposedStringWithCanonicalMapping.lowercased()
+    }
+    
     /// Analyzes an archive filename to determine if it belongs to a multi-part volume set
-    public static func detectMultipartType(from url: URL) -> MultipartType {
+    public static func detectMultipartType(from rawURL: URL) -> MultipartType {
+        let url = normalizeURL(rawURL)
         let filename = url.lastPathComponent
         
         // 1. Check for .part(\d+).rar (case-insensitive)
@@ -91,8 +102,9 @@ public final class MultipartDetector {
         if url.pathExtension.lowercased() == "zip" {
             let base = url.deletingPathExtension().lastPathComponent
             let parent = url.deletingLastPathComponent()
-            let z01 = parent.appendingPathComponent("\(base).z01")
-            if FileManager.default.fileExists(atPath: z01.path) {
+            let z01Lower = parent.appendingPathComponent("\(base).z01")
+            let z01Upper = parent.appendingPathComponent("\(base).Z01")
+            if FileManager.default.fileExists(atPath: z01Lower.path) || FileManager.default.fileExists(atPath: z01Upper.path) {
                 return .zipZ0N(baseName: base, partNumber: 0) // .zip is the header/final volume in split zip
             }
         }
@@ -109,8 +121,9 @@ public final class MultipartDetector {
         if url.pathExtension.lowercased() == "rar" {
             let base = url.deletingPathExtension().lastPathComponent
             let parent = url.deletingLastPathComponent()
-            let r00 = parent.appendingPathComponent("\(base).r00")
-            if FileManager.default.fileExists(atPath: r00.path) {
+            let r00Lower = parent.appendingPathComponent("\(base).r00")
+            let r00Upper = parent.appendingPathComponent("\(base).R00")
+            if FileManager.default.fileExists(atPath: r00Lower.path) || FileManager.default.fileExists(atPath: r00Upper.path) {
                 return .rarLegacy(baseName: base, partNumber: 1) // .rar is part 1
             }
         }
@@ -120,7 +133,8 @@ public final class MultipartDetector {
     
     /// Scans the directory containing `url` to discover all sibling volumes of the same multipart archive.
     /// Validates completeness and detects missing parts.
-    public static func inspectMultipartSet(for url: URL) -> MultipartGroup? {
+    public static func inspectMultipartSet(for rawURL: URL) -> MultipartGroup? {
+        let url = normalizeURL(rawURL)
         let type = detectMultipartType(from: url)
         if case .none = type { return nil }
         
@@ -129,30 +143,32 @@ public final class MultipartDetector {
         
         var siblingURLs: [URL] = []
         var partNumbersFound: Set<Int> = []
+        var part1URL: URL? = nil
         
         switch type {
-        case .rarPartN(let baseName, _, _):
+        case .rarPartN(let baseName, _, let padding):
             for file in files {
                 let fileURL = parentDir.appendingPathComponent(file)
-                if case .rarPartN(let b, let num, _) = detectMultipartType(from: fileURL), b.lowercased() == baseName.lowercased() {
+                if case .rarPartN(let b, let num, _) = detectMultipartType(from: fileURL), normKey(b) == normKey(baseName) {
                     siblingURLs.append(fileURL)
                     partNumbersFound.insert(num)
+                    if num == 1 { part1URL = fileURL }
                 }
             }
             siblingURLs.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             
-            // Check continuity
             let maxPart = partNumbersFound.max() ?? 1
             var missingParts: [Int] = []
             var missingNames: [String] = []
             for i in 1...maxPart {
                 if !partNumbersFound.contains(i) {
                     missingParts.append(i)
-                    missingNames.append("\(baseName).part\(i).rar")
+                    let numFmt = padding > 1 ? String(format: "%0\(padding)d", i) : "\(i)"
+                    missingNames.append("\(baseName).part\(numFmt).rar")
                 }
             }
             
-            guard let primary = siblingURLs.first else { return nil }
+            guard let primary = part1URL ?? siblingURLs.first else { return nil }
             return MultipartGroup(
                 baseName: baseName,
                 multipartType: type,
@@ -166,9 +182,10 @@ public final class MultipartDetector {
         case .sevenZip00N(let baseName, _):
             for file in files {
                 let fileURL = parentDir.appendingPathComponent(file)
-                if case .sevenZip00N(let b, let num) = detectMultipartType(from: fileURL), b.lowercased() == baseName.lowercased() {
+                if case .sevenZip00N(let b, let num) = detectMultipartType(from: fileURL), normKey(b) == normKey(baseName) {
                     siblingURLs.append(fileURL)
                     partNumbersFound.insert(num)
+                    if num == 1 { part1URL = fileURL }
                 }
             }
             siblingURLs.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
@@ -184,7 +201,7 @@ public final class MultipartDetector {
                 }
             }
             
-            guard let primary = siblingURLs.first else { return nil }
+            guard let primary = part1URL ?? siblingURLs.first else { return nil }
             return MultipartGroup(
                 baseName: baseName,
                 multipartType: type,
@@ -200,7 +217,7 @@ public final class MultipartDetector {
             for file in files {
                 let fileURL = parentDir.appendingPathComponent(file)
                 let fType = detectMultipartType(from: fileURL)
-                if case .zipZ0N(let b, let num) = fType, b.lowercased() == baseName.lowercased() {
+                if case .zipZ0N(let b, let num) = fType, normKey(b) == normKey(baseName) {
                     siblingURLs.append(fileURL)
                     if num == 0 {
                         zipURL = fileURL
@@ -225,7 +242,7 @@ public final class MultipartDetector {
                 missingNames.append("\(baseName).zip")
             }
             
-            let primary = zipURL ?? siblingURLs.first!
+            guard let primary = zipURL ?? siblingURLs.first else { return nil }
             return MultipartGroup(
                 baseName: baseName,
                 multipartType: type,
@@ -239,9 +256,10 @@ public final class MultipartDetector {
         case .rarLegacy(let baseName, _):
             for file in files {
                 let fileURL = parentDir.appendingPathComponent(file)
-                if case .rarLegacy(let b, let num) = detectMultipartType(from: fileURL), b.lowercased() == baseName.lowercased() {
+                if case .rarLegacy(let b, let num) = detectMultipartType(from: fileURL), normKey(b) == normKey(baseName) {
                     siblingURLs.append(fileURL)
                     partNumbersFound.insert(num)
+                    if num == 1 { part1URL = fileURL }
                 }
             }
             siblingURLs.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
@@ -261,7 +279,7 @@ public final class MultipartDetector {
                 }
             }
             
-            guard let primary = siblingURLs.first else { return nil }
+            guard let primary = part1URL ?? siblingURLs.first else { return nil }
             return MultipartGroup(
                 baseName: baseName,
                 multipartType: type,
@@ -277,16 +295,20 @@ public final class MultipartDetector {
         }
     }
     
-    /// Groups a selection of input URLs into discrete tasks, deduplicating multiple selected parts of the same volume set.
+    /// Groups a selection of input URLs into discrete tasks, deduplicating multiple selected parts of the same volume set
+    /// while keeping multipart archives in different directories completely independent.
     public static func groupArchives(_ urls: [URL]) -> [ExtractionTaskItem] {
-        var processedBases: Set<String> = []
+        var processedMultipartKeys: Set<String> = []
+        var processedSinglePaths: Set<String> = []
         var tasks: [ExtractionTaskItem] = []
         
-        for url in urls {
+        for rawURL in urls {
+            let url = normalizeURL(rawURL)
             if let group = inspectMultipartSet(for: url) {
-                let key = group.baseName.lowercased()
-                if !processedBases.contains(key) {
-                    processedBases.insert(key)
+                let parentPath = url.deletingLastPathComponent().resolvingSymlinksInPath().path
+                let key = "\(normKey(parentPath))::\(normKey(group.baseName))"
+                if !processedMultipartKeys.contains(key) {
+                    processedMultipartKeys.insert(key)
                     tasks.append(ExtractionTaskItem(
                         archiveURL: group.primaryVolumeURL,
                         isMultipart: true,
@@ -294,7 +316,11 @@ public final class MultipartDetector {
                     ))
                 }
             } else {
-                tasks.append(ExtractionTaskItem(archiveURL: url, isMultipart: false, multipartGroup: nil))
+                let singleKey = normKey(url.resolvingSymlinksInPath().path)
+                if !processedSinglePaths.contains(singleKey) {
+                    processedSinglePaths.insert(singleKey)
+                    tasks.append(ExtractionTaskItem(archiveURL: url, isMultipart: false, multipartGroup: nil))
+                }
             }
         }
         

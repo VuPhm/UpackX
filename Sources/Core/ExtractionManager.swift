@@ -10,7 +10,8 @@ public final class ExtractionManager {
     private init() {}
     
     /// Finds the best extractor backend for a given archive URL and format
-    public func selectExtractor(for archiveURL: URL, isMultipart: Bool = false) -> ArchiveExtractorProtocol {
+    public func selectExtractor(for rawArchiveURL: URL, isMultipart: Bool = false) -> ArchiveExtractorProtocol {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
         let format = ArchiveFormat.detect(from: archiveURL)
         
         // Multi-part RAR and 7z archives work most reliably via 7zz's multi-volume engine
@@ -32,22 +33,33 @@ public final class ExtractionManager {
     }
     
     /// Inspects an archive to return entry count, uncompressed size, etc.
-    public func inspect(archiveURL: URL, password: String? = nil) throws -> ArchiveInfo {
+    public func inspect(archiveURL rawArchiveURL: URL, password: String? = nil) throws -> ArchiveInfo {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
         let isMulti = MultipartDetector.detectMultipartType(from: archiveURL) != .none
         let extractor = selectExtractor(for: archiveURL, isMultipart: isMulti)
-        return try extractor.inspect(archiveURL: archiveURL, password: password)
+        do {
+            return try extractor.inspect(archiveURL: archiveURL, password: password)
+        } catch {
+            let format = ArchiveFormat.detect(from: archiveURL)
+            if (format == .sevenZip || format == .rar) && sevenZipExtractor.isAvailable && (extractor as AnyObject) !== sevenZipExtractor {
+                return try sevenZipExtractor.inspect(archiveURL: archiveURL, password: password)
+            }
+            throw error
+        }
     }
     
-    /// Executes Quick Extract directly in the archive's parent folder without enclosing folder
-    public func quickExtract(archiveURL: URL,
+    /// Executes Quick Extract directly in the archive's parent folder without enclosing folder.
+    /// Completely independent: never inherits any custom destination from previous operations.
+    public func quickExtract(archiveURL rawArchiveURL: URL,
                              conflictResolver: ConflictResolver? = nil,
                              progress: @escaping (ExtractionProgress) -> Bool,
                              completion: @escaping (Result<ExtractionResult, Error>) -> Void) {
-        let parentDir = archiveURL.deletingLastPathComponent()
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
+        let parentDir = PathSecurity.defaultExtractionDirectory(for: archiveURL)
         let options = ExtractionOptions(
             destinationDirectory: parentDir,
-            createEnclosingFolder: false, // Requirement 2.2.A & 0.3: No enclosing folder
-            conflictStrategy: .ask,        // Requirement 2.2.A: Safe conflict handling, never silent overwrite
+            createEnclosingFolder: false, // Quick Extract never creates an enclosing wrapper folder
+            conflictStrategy: .ask,
             conflictResolver: conflictResolver
         )
         
@@ -55,18 +67,22 @@ public final class ExtractionManager {
     }
     
     /// Executes Extract To... with custom options
-    public func extractTo(archiveURL: URL,
+    public func extractTo(archiveURL rawArchiveURL: URL,
                           options: ExtractionOptions,
                           progress: @escaping (ExtractionProgress) -> Bool,
                           completion: @escaping (Result<ExtractionResult, Error>) -> Void) {
-        execute(archiveURL: archiveURL, options: options, progress: progress, completion: completion)
+        execute(archiveURL: rawArchiveURL, options: options, progress: progress, completion: completion)
     }
     
     /// Executes extraction in a background thread to prevent UI freezing
-    public func execute(archiveURL: URL,
-                        options: ExtractionOptions,
+    public func execute(archiveURL rawArchiveURL: URL,
+                        options rawOptions: ExtractionOptions,
                         progress: @escaping (ExtractionProgress) -> Bool,
                         completion: @escaping (Result<ExtractionResult, Error>) -> Void) {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
+        var options = rawOptions
+        options.destinationDirectory = PathSecurity.normalizeDirectoryURL(rawOptions.destinationDirectory)
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
@@ -92,12 +108,26 @@ public final class ExtractionManager {
                     }
                     return
                 }
-                actualArchiveURL = group.primaryVolumeURL
+                actualArchiveURL = PathSecurity.normalizeFileURL(group.primaryVolumeURL)
             }
             
-            let extractor = self.selectExtractor(for: actualArchiveURL, isMultipart: isMulti)
+            let format = ArchiveFormat.detect(from: actualArchiveURL)
+            let primaryExtractor = self.selectExtractor(for: actualArchiveURL, isMultipart: isMulti)
+            
+            let runExtraction = { (ext: ArchiveExtractorProtocol, opts: ExtractionOptions) throws -> ExtractionResult in
+                do {
+                    return try ext.extract(archiveURL: actualArchiveURL, options: opts, progress: progress)
+                } catch ExtractionError.corruptedArchive(let msg) {
+                    // Fallback to 7zz for RAR5 / solid 7z formats if native libarchive cannot decode the filter
+                    if (format == .sevenZip || format == .rar) && self.sevenZipExtractor.isAvailable && (ext as AnyObject) !== self.sevenZipExtractor {
+                        return try self.sevenZipExtractor.extract(archiveURL: actualArchiveURL, options: opts, progress: progress)
+                    }
+                    throw ExtractionError.corruptedArchive(msg)
+                }
+            }
+            
             do {
-                let result = try extractor.extract(archiveURL: actualArchiveURL, options: options, progress: progress)
+                let result = try runExtraction(primaryExtractor, options)
                 DispatchQueue.main.async {
                     completion(.success(result))
                 }
@@ -106,7 +136,7 @@ public final class ExtractionManager {
                     var retryOptions = options
                     retryOptions.password = pw
                     do {
-                        let retryResult = try extractor.extract(archiveURL: actualArchiveURL, options: retryOptions, progress: progress)
+                        let retryResult = try runExtraction(primaryExtractor, retryOptions)
                         DispatchQueue.main.async {
                             completion(.success(retryResult))
                         }

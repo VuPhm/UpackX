@@ -11,16 +11,18 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
     private var isConfirmed = false
     private var isCancelled = false
     
-    private let pathTextField = NSTextField()
+    private let pathTextField = DestinationPathTextField()
+    private let pathFieldEditor = DestinationPathFieldEditor()
     private let browseButton = NSButton(title: "Chọn...", target: nil, action: nil)
     private let enclosingFolderCheckbox = NSButton(checkboxWithTitle: "Tạo thư mục bao ngoài", target: nil, action: nil)
     private let conflictPopUp = NSPopUpButton()
     private let infoLabel = NSTextField(labelWithString: "Đang đọc thông tin archive...")
     
     public init(archiveURL: URL, totalArchives: Int = 1) {
-        self.archiveURL = archiveURL
+        let normalizedArchive = PathSecurity.normalizeFileURL(archiveURL)
+        self.archiveURL = normalizedArchive
         self.totalArchives = totalArchives
-        self.selectedDestinationURL = archiveURL.deletingLastPathComponent()
+        self.selectedDestinationURL = PathSecurity.defaultExtractionDirectory(for: normalizedArchive)
         
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 490, height: 265),
@@ -42,6 +44,13 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         fatalError("init(coder:) has not been implemented")
     }
     
+    private func applyDroppedOrSelectedFolder(_ folderURL: URL) {
+        let cleanFolder = PathSecurity.normalizeDirectoryURL(folderURL)
+        window?.endEditing(for: nil)
+        selectedDestinationURL = cleanFolder
+        pathTextField.stringValue = cleanFolder.path
+    }
+    
     private func setupUI() {
         guard let contentView = window?.contentView else { return }
         
@@ -49,8 +58,7 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         let bgView = ExtractToBackgroundView(frame: contentView.bounds)
         bgView.autoresizingMask = [.width, .height]
         bgView.onFolderDropped = { [weak self] folderURL in
-            self?.selectedDestinationURL = folderURL
-            self?.pathTextField.stringValue = folderURL.path
+            self?.applyDroppedOrSelectedFolder(folderURL)
         }
         contentView.addSubview(bgView, positioned: .below, relativeTo: nil)
         
@@ -102,6 +110,12 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         pathTextField.placeholderString = "Nhập, dán hoặc kéo thả thư mục vào đây..."
         pathTextField.target = self
         pathTextField.action = #selector(extractClicked)
+        pathTextField.onFolderDropped = { [weak self] folderURL in
+            self?.applyDroppedOrSelectedFolder(folderURL)
+        }
+        pathFieldEditor.onFolderDropped = { [weak self] folderURL in
+            self?.applyDroppedOrSelectedFolder(folderURL)
+        }
         contentView.addSubview(pathTextField)
         
         browseButton.frame = NSRect(x: 388, y: 129, width: 82, height: 28)
@@ -110,8 +124,8 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         browseButton.action = #selector(browseClicked)
         contentView.addSubview(browseButton)
         
-        // Enclosing folder checkbox (Default: OFF per Section 0.3 & 2.2.B)
-        let folderName = archiveURL.deletingPathExtension().lastPathComponent
+        // Enclosing folder checkbox (Default: OFF)
+        let folderName = PathSecurity.archiveBaseName(for: archiveURL)
         if totalArchives > 1 {
             enclosingFolderCheckbox.title = "Tạo thư mục bao ngoài cho từng archive"
         } else {
@@ -121,7 +135,7 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         enclosingFolderCheckbox.frame = NSRect(x: 20, y: 100, width: 450, height: 20)
         contentView.addSubview(enclosingFolderCheckbox)
         
-        // Conflict policy (Default: Ask per Section 0.3)
+        // Conflict policy (Default: Ask)
         let conflictTitle = NSTextField(labelWithString: "Xử lý file trùng:")
         conflictTitle.frame = NSRect(x: 20, y: 70, width: 120, height: 20)
         conflictTitle.font = NSFont.systemFont(ofSize: 12, weight: .regular)
@@ -132,7 +146,7 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
             conflictPopUp.addItem(withTitle: strategy.displayName)
             conflictPopUp.lastItem?.representedObject = strategy
         }
-        conflictPopUp.selectItem(at: 0) // Default: Ask ("Hỏi khi trùng")
+        conflictPopUp.selectItem(at: 0) // Default: Ask ("Hỏi khi trùng tên")
         contentView.addSubview(conflictPopUp)
         
         // Action buttons
@@ -147,6 +161,14 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         extractButton.bezelStyle = .rounded
         extractButton.keyEquivalent = "\r" // Enter
         contentView.addSubview(extractButton)
+    }
+    
+    public func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        if (client as AnyObject) === pathTextField {
+            pathFieldEditor.isFieldEditor = true
+            return pathFieldEditor
+        }
+        return nil
     }
     
     public override func showWindow(_ sender: Any?) {
@@ -189,6 +211,7 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
     }
     
     @objc private func browseClicked() {
+        window?.endEditing(for: nil)
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -200,13 +223,11 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         if let window = self.window {
             panel.beginSheetModal(for: window) { [weak self] response in
                 if response == .OK, let url = panel.url {
-                    self?.selectedDestinationURL = url
-                    self?.pathTextField.stringValue = url.path
+                    self?.applyDroppedOrSelectedFolder(url)
                 }
             }
         } else if panel.runModal() == .OK, let url = panel.url {
-            selectedDestinationURL = url
-            pathTextField.stringValue = url.path
+            applyDroppedOrSelectedFolder(url)
         }
     }
     
@@ -230,37 +251,29 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
     }
     
     public static func cleanPathString(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.hasPrefix("file://") {
-            if let u = URL(string: s) {
-                return u.path
-            }
-            s = String(s.dropFirst(7))
-        }
-        if (s.hasPrefix("\"") && s.hasSuffix("\"")) || (s.hasPrefix("'") && s.hasSuffix("'")) {
-            s = String(s.dropFirst().dropLast())
-        }
-        s = s.replacingOccurrences(of: "\\ ", with: " ")
-        s = (s as NSString).expandingTildeInPath
-        return URL(fileURLWithPath: s).standardized.path
+        return PathSecurity.cleanUserInputPath(raw)
     }
     
     private func validateAndProceed() {
+        window?.endEditing(for: nil)
         let rawPath = pathTextField.stringValue
-        let cleaned = Self.cleanPathString(rawPath)
-        guard !cleaned.isEmpty else {
+        
+        let targetURL: URL
+        do {
+            targetURL = try PathSecurity.resolveDestinationDirectoryURL(rawPath, baseDirectory: nil)
+        } catch {
             let alert = NSAlert()
             alert.messageText = "Đường dẫn không hợp lệ"
-            alert.informativeText = "Vui lòng nhập đường dẫn thư mục giải nén."
+            alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
-            pathTextField.becomeFirstResponder()
+            window?.makeFirstResponder(pathTextField)
             return
         }
         
-        let targetURL = URL(fileURLWithPath: cleaned).standardized
+        pathTextField.stringValue = targetURL.path
         
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -275,13 +288,26 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
                 alert.addButton(withTitle: "OK")
                 NSApp.activate(ignoringOtherApps: true)
                 alert.runModal()
-                pathTextField.becomeFirstResponder()
+                window?.makeFirstResponder(pathTextField)
                 return
             }
-            // Directory exists, proceed
             self.selectedDestinationURL = targetURL
             executeProceed()
         } else {
+            // Check if targetURL is a broken symlink via lstat
+            var isSymlink = false
+            if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: nil, isSymlink: &isSymlink) && isSymlink {
+                let alert = NSAlert()
+                alert.messageText = "Đường dẫn không hợp lệ"
+                alert.informativeText = "Đường dẫn \"\(targetURL.lastPathComponent)\" là một liên kết tượng trưng (symlink) bị hỏng.\nVui lòng chọn thư mục khác."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "OK")
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+                window?.makeFirstResponder(pathTextField)
+                return
+            }
+            
             // Directory does not exist: ask to create
             let alert = NSAlert()
             alert.messageText = "Thư mục chưa tồn tại"
@@ -305,10 +331,10 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
                     errAlert.addButton(withTitle: "OK")
                     NSApp.activate(ignoringOtherApps: true)
                     errAlert.runModal()
-                    pathTextField.becomeFirstResponder()
+                    window?.makeFirstResponder(pathTextField)
                 }
             } else {
-                pathTextField.becomeFirstResponder()
+                window?.makeFirstResponder(pathTextField)
             }
         }
     }
@@ -319,14 +345,104 @@ public final class ExtractToWindowController: NSWindowController, NSWindowDelega
         let createFolder = (enclosingFolderCheckbox.state == .on)
         
         let options = ExtractionOptions(
-            destinationDirectory: selectedDestinationURL,
+            destinationDirectory: PathSecurity.normalizeDirectoryURL(selectedDestinationURL),
             createEnclosingFolder: createFolder,
             conflictStrategy: strategy,
             conflictResolver: { ConflictDialog.prompt(for: $0) }
         )
         
+        let confirmCallback = onConfirm
+        onConfirm = nil
+        window?.orderOut(nil)
+        confirmCallback?(options)
         window?.close()
-        onConfirm?(options)
+    }
+}
+
+// MARK: - DestinationPathTextField & DestinationPathFieldEditor (Safe Folder Drag & Paste)
+
+public final class DestinationPathTextField: NSTextField {
+    public var onFolderDropped: ((URL) -> Void)?
+    
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.fileURL])
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if Self.extractDroppedDirectory(from: sender.draggingPasteboard) != nil {
+            return .copy
+        }
+        return []
+    }
+    
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let dirURL = Self.extractDroppedDirectory(from: sender.draggingPasteboard) else {
+            return false
+        }
+        window?.endEditing(for: nil)
+        stringValue = dirURL.path
+        onFolderDropped?(dirURL)
+        return true
+    }
+    
+    public static func extractDroppedDirectory(from pboard: NSPasteboard) -> URL? {
+        let urls = (pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ??
+                   (pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? []
+        guard let first = urls.first else { return nil }
+        let normalized = PathSecurity.normalizeFileURL(first)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: normalized.path, isDirectory: &isDir) && isDir.boolValue {
+            return PathSecurity.normalizeDirectoryURL(normalized)
+        }
+        return nil
+    }
+}
+
+public final class DestinationPathFieldEditor: NSTextView {
+    public var onFolderDropped: ((URL) -> Void)?
+    
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if DestinationPathTextField.extractDroppedDirectory(from: sender.draggingPasteboard) != nil {
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+    
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if let dirURL = DestinationPathTextField.extractDroppedDirectory(from: sender.draggingPasteboard) {
+            self.string = dirURL.path
+            didChangeText()
+            onFolderDropped?(dirURL)
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+    
+    public override func paste(_ sender: Any?) {
+        let pb = NSPasteboard.general
+        // When a user copies a folder in Finder with Cmd+C, Finder places the full URL in .fileURL
+        // and only the bare folder name (without '/') in .string. Resolve the full directory path!
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let first = urls.first {
+            let normalized = PathSecurity.normalizeFileURL(first)
+            let plainStr = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if plainStr.isEmpty || plainStr == normalized.lastPathComponent || !plainStr.contains("/") {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: normalized.path, isDirectory: &isDir) {
+                    let targetDir = isDir.boolValue ? normalized : normalized.deletingLastPathComponent()
+                    self.string = targetDir.path
+                    didChangeText()
+                    onFolderDropped?(PathSecurity.normalizeDirectoryURL(targetDir))
+                    return
+                }
+            }
+        }
+        super.paste(sender)
     }
 }
 
@@ -346,10 +462,7 @@ public final class ExtractToBackgroundView: NSView {
     }
     
     public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-              let first = items.first else { return [] }
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir) && isDir.boolValue {
+        if DestinationPathTextField.extractDroppedDirectory(from: sender.draggingPasteboard) != nil {
             layer?.borderColor = NSColor.controlAccentColor.cgColor
             layer?.borderWidth = 2
             needsDisplay = true
@@ -367,13 +480,10 @@ public final class ExtractToBackgroundView: NSView {
         layer?.borderWidth = 0
         needsDisplay = true
         
-        guard let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-              let first = items.first else { return false }
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir) && isDir.boolValue {
-            onFolderDropped?(first)
-            return true
+        guard let dirURL = DestinationPathTextField.extractDroppedDirectory(from: sender.draggingPasteboard) else {
+            return false
         }
-        return false
+        onFolderDropped?(dirURL)
+        return true
     }
 }

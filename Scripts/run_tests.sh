@@ -12,7 +12,15 @@ fi
 
 TEST_DIR="/tmp/upackx_test_suite_$(date +%s)"
 mkdir -p "${TEST_DIR}"
-trap 'rm -rf "${TEST_DIR}"' EXIT
+LSREGISTER_BIN="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+cleanup_test_suite() {
+    rm -rf "${TEST_DIR}"
+    if [ -x "${LSREGISTER_BIN}" ] && [ -d "/Applications/UpackX.app" ]; then
+        "${LSREGISTER_BIN}" -u "${PROJECT_DIR}/build/UpackX.app" 2>/dev/null || true
+        "${LSREGISTER_BIN}" -f "/Applications/UpackX.app" 2>/dev/null || true
+    fi
+}
+trap cleanup_test_suite EXIT
 
 PASSED=0
 FAILED=0
@@ -1164,6 +1172,442 @@ if [ -f "${PROJECT_DIR}/Sources/Core/SemVer.swift" ] && \
     fi
 else
     fail "Update Subsystem" "Missing SemVer.swift, UpdateManager.swift, or UpdateWindowController.swift"
+fi
+
+# -------------------------------------------------------------------------
+# Test 44: Exact Root File Destination Semantics (Video.zip -> clip.mp4)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 44] Root File Extraction Semantics (Quick Extract vs Extract To)..."
+T44_DIR="${TEST_DIR}/t44_video"
+mkdir -p "${T44_DIR}/src" "${T44_DIR}/Downloads" "${T44_DIR}/Movies/Project"
+echo "CLIP_MP4_BINARY_PAYLOAD" > "${T44_DIR}/src/clip.mp4"
+(cd "${T44_DIR}/src" && zip "${T44_DIR}/Downloads/Video.zip" clip.mp4 >/dev/null)
+
+# 1. Quick Extract: /Downloads/Video.zip -> /Downloads/clip.mp4 (NEVER /Downloads/Video/clip.mp4)
+"${BUILD_BIN}" --quick --headless "${T44_DIR}/Downloads/Video.zip" >/dev/null 2>&1
+if [ -f "${T44_DIR}/Downloads/clip.mp4" ] && [ ! -d "${T44_DIR}/Downloads/Video" ]; then
+    pass "Quick Extract placed clip.mp4 directly at /Downloads/clip.mp4 without creating /Downloads/Video"
+else
+    fail "Quick Extract Root File" "Expected ${T44_DIR}/Downloads/clip.mp4 without /Downloads/Video wrapper"
+fi
+
+# 2. Extract To (/Movies/Project): -> /Movies/Project/clip.mp4 (NEVER /Movies/Project/Video/clip.mp4)
+"${BUILD_BIN}" --extract-to --headless "${T44_DIR}/Downloads/Video.zip" -o "${T44_DIR}/Movies/Project" >/dev/null 2>&1
+if [ -f "${T44_DIR}/Movies/Project/clip.mp4" ] && [ ! -d "${T44_DIR}/Movies/Project/Video" ]; then
+    pass "Extract To (/Movies/Project) placed clip.mp4 at /Movies/Project/clip.mp4 without wrapper"
+else
+    fail "Extract To Root File" "Expected ${T44_DIR}/Movies/Project/clip.mp4 without /Movies/Project/Video wrapper"
+fi
+
+# -------------------------------------------------------------------------
+# Test 45: Real Root Folder Preservation & Enclosing Folder Duplicate Wrapper Prevention
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 45] Real Root Folder Preservation & Enclosing Folder ON/OFF (No Video/Video/)..."
+T45_DIR="${TEST_DIR}/t45_enclosing"
+mkdir -p "${T45_DIR}/Video"
+echo "VIDEO_STREAM_DATA" > "${T45_DIR}/Video/clip.mp4"
+
+# Compress Video/ directory with UpackX -> Video.zip contains Video/clip.mp4
+"${BUILD_BIN}" --compress --headless "${T45_DIR}/Video" -o "${T45_DIR}/Video.zip" >/dev/null 2>&1
+
+# 1. Enclosing Folder OFF: preserve real root folder Video/ -> dest_off/Video/clip.mp4
+mkdir -p "${T45_DIR}/dest_off"
+"${BUILD_BIN}" --extract-to --headless --no-enclosing-folder "${T45_DIR}/Video.zip" -o "${T45_DIR}/dest_off" >/dev/null 2>&1
+if [ -f "${T45_DIR}/dest_off/Video/clip.mp4" ] && [ ! -d "${T45_DIR}/dest_off/Video/Video" ]; then
+    pass "Archive with real root folder preserved structure under Enclosing Folder OFF (dest_off/Video/clip.mp4)"
+else
+    fail "Real Root Folder (OFF)" "Structure not preserved accurately"
+fi
+
+# 2. Enclosing Folder ON when archive ALREADY has root folder Video/: must NOT create Video/Video/!
+mkdir -p "${T45_DIR}/dest_on_existing_root"
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T45_DIR}/Video.zip" -o "${T45_DIR}/dest_on_existing_root" >/dev/null 2>&1
+if [ -f "${T45_DIR}/dest_on_existing_root/Video/clip.mp4" ] && [ ! -d "${T45_DIR}/dest_on_existing_root/Video/Video" ]; then
+    pass "Enclosing Folder ON avoided duplicate wrapper (no Video/Video/ when archive already contains Video/)"
+else
+    fail "Enclosing Folder ON Duplicate" "Created unwanted duplicate Video/Video/ wrapper!"
+fi
+
+# 3. Enclosing Folder ON when archive has loose root file clip.mp4: MUST create Video/clip.mp4
+mkdir -p "${T45_DIR}/dest_on_loose"
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T44_DIR}/Downloads/Video.zip" -o "${T45_DIR}/dest_on_loose" >/dev/null 2>&1
+if [ -f "${T45_DIR}/dest_on_loose/Video/clip.mp4" ] && [ ! -f "${T45_DIR}/dest_on_loose/clip.mp4" ]; then
+    pass "Enclosing Folder ON created single enclosing folder (dest_on_loose/Video/clip.mp4) for loose root archive"
+else
+    fail "Enclosing Folder ON Loose" "Failed to create single enclosing folder for loose root archive"
+fi
+
+# 4. Compound extension (.tar.gz) with Enclosing Folder ON: wrapper must be 'backup', not 'backup.tar'
+mkdir -p "${T45_DIR}/tar_src" "${T45_DIR}/tar_dest"
+echo "TAR_PAYLOAD" > "${T45_DIR}/tar_src/readme.txt"
+(cd "${T45_DIR}/tar_src" && tar -czf "${T45_DIR}/backup.tar.gz" readme.txt >/dev/null)
+"${BUILD_BIN}" --extract-to --headless --enclosing-folder "${T45_DIR}/backup.tar.gz" -o "${T45_DIR}/tar_dest" >/dev/null 2>&1
+if [ -f "${T45_DIR}/tar_dest/backup/readme.txt" ] && [ ! -d "${T45_DIR}/tar_dest/backup.tar" ]; then
+    pass "Compound extension (.tar.gz) stripped cleanly for enclosing folder ('backup/readme.txt', not 'backup.tar')"
+else
+    fail "Compound Extension Enclosing" "Expected tar_dest/backup/readme.txt"
+fi
+
+# -------------------------------------------------------------------------
+# Test 46: Format Consistency (ZIP, TAR.GZ, 7Z, RAR) Destination Semantics
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 46] Format Consistency (ZIP, TAR.GZ, 7Z, RAR) Destination Semantics..."
+T46_DIR="${TEST_DIR}/t46_formats"
+mkdir -p "${T46_DIR}/src/RootPkg"
+echo "FORMAT_CONSISTENCY_PAYLOAD" > "${T46_DIR}/src/RootPkg/item.txt"
+(cd "${T46_DIR}/src" && zip -r "${T46_DIR}/RootPkg.zip" RootPkg >/dev/null)
+(cd "${T46_DIR}/src" && tar -czf "${T46_DIR}/RootPkg.tar.gz" RootPkg >/dev/null)
+if [ -x "${SEVEN_Z_BIN}" ]; then
+    (cd "${T46_DIR}/src" && "${SEVEN_Z_BIN}" a "${T46_DIR}/RootPkg.7z" RootPkg >/dev/null)
+fi
+
+for fmt_ext in "zip" "tar.gz" "7z"; do
+    ARCH_FILE="${T46_DIR}/RootPkg.${fmt_ext}"
+    if [ -f "${ARCH_FILE}" ]; then
+        OUT_FMT="${T46_DIR}/out_${fmt_ext}"
+        mkdir -p "${OUT_FMT}"
+        "${BUILD_BIN}" --extract-to --headless --enclosing-folder "${ARCH_FILE}" -o "${OUT_FMT}" >/dev/null 2>&1
+        if [ -f "${OUT_FMT}/RootPkg/item.txt" ] && [ ! -d "${OUT_FMT}/RootPkg/RootPkg" ]; then
+            pass "Format .${fmt_ext} extracted with consistent destination semantics and zero duplicate root folder"
+        else
+            fail "Format .${fmt_ext} Consistency" "Unexpected structure in ${OUT_FMT}"
+        fi
+    fi
+done
+
+# -------------------------------------------------------------------------
+# Test 47: State Leakage Prevention Chain (Extract To -> Quick Extract -> Extract To)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 47] Sequential Operation Chain (Extract To [A] -> Quick Extract [B] -> Extract To [C])..."
+T47_DIR="${TEST_DIR}/t47_chain"
+mkdir -p "${T47_DIR}/src1" "${T47_DIR}/src2" "${T47_DIR}/src3"
+mkdir -p "${T47_DIR}/DirA_Custom" "${T47_DIR}/DirB_QuickArchiveHost" "${T47_DIR}/DirC_Custom"
+echo "STEP_1_EXTRACT_TO_A" > "${T47_DIR}/src1/step1.txt"
+echo "STEP_2_QUICK_EXTRACT_BESIDE_B" > "${T47_DIR}/src2/step2.txt"
+echo "STEP_3_EXTRACT_TO_C" > "${T47_DIR}/src3/step3.txt"
+
+(cd "${T47_DIR}/src1" && zip "${T47_DIR}/arch1.zip" step1.txt >/dev/null)
+(cd "${T47_DIR}/src2" && zip "${T47_DIR}/DirB_QuickArchiveHost/arch2.zip" step2.txt >/dev/null)
+(cd "${T47_DIR}/src3" && zip "${T47_DIR}/arch3.zip" step3.txt >/dev/null)
+
+# Run in-process Swift test driving AppDelegate, ExtractToWindowController, CompressToWindowController, and ExtractionManager through:
+# 1. Extract To (DirA_Custom, enclosing=true)
+# 2. Quick Extract (DirB_QuickArchiveHost/arch2.zip -> must land in DirB_QuickArchiveHost/step2.txt, NOT DirA_Custom and NOT with enclosing folder!)
+# 3. Extract To (DirC_Custom, enclosing=false)
+T47_SWIFT="${T47_DIR}/main.swift"
+cat << 'EOF' > "${T47_SWIFT}"
+import AppKit
+
+let baseDir = CommandLine.arguments[1]
+let arch1 = URL(fileURLWithPath: "\(baseDir)/arch1.zip")
+let arch2 = URL(fileURLWithPath: "\(baseDir)/DirB_QuickArchiveHost/arch2.zip")
+let arch3 = URL(fileURLWithPath: "\(baseDir)/arch3.zip")
+
+let destA = URL(fileURLWithPath: "\(baseDir)/DirA_Custom")
+let destC = URL(fileURLWithPath: "\(baseDir)/DirC_Custom")
+
+let delegate = AppDelegate()
+delegate.suppressAutoTerminationForTesting = true
+delegate.isHeadlessMode = true
+
+func waitForFile(_ path: String, timeout: TimeInterval = 10.0) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        if FileManager.default.fileExists(atPath: path) {
+            // Give finishQueue() a runloop tick to complete
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            return true
+        }
+    }
+    return false
+}
+
+// Step 1: Extract To destA with createEnclosingFolder = true, and wait until completely finished
+let tasks1 = MultipartDetector.groupArchives([arch1])
+delegate.startSequentialExtraction(
+    tasks: tasks1,
+    explicitConflictStrategy: .overwrite,
+    customDestination: destA,
+    createEnclosingFolder: true
+)
+guard waitForFile("\(baseDir)/DirA_Custom/arch1/step1.txt") else { exit(1) }
+
+// Step 2: Subsequent Quick Extract on arch2 (must extract strictly into DirB_QuickArchiveHost without inheriting destA or enclosing=true)
+let tasks2 = MultipartDetector.groupArchives([arch2])
+delegate.startQuickExtraction(
+    tasks: tasks2,
+    explicitConflictStrategy: .overwrite
+)
+guard waitForFile("\(baseDir)/DirB_QuickArchiveHost/step2.txt") else { exit(2) }
+
+// Step 3: Subsequent Extract To destC with createEnclosingFolder = false
+let tasks3 = MultipartDetector.groupArchives([arch3])
+delegate.startSequentialExtraction(
+    tasks: tasks3,
+    explicitConflictStrategy: .overwrite,
+    customDestination: destC,
+    createEnclosingFolder: false
+)
+guard waitForFile("\(baseDir)/DirC_Custom/step3.txt") else { exit(3) }
+exit(0)
+EOF
+
+NON_MAIN_SWIFT=()
+while IFS= read -r -d '' sfile; do
+    if [[ "$(basename "$sfile")" != "main.swift" ]]; then
+        NON_MAIN_SWIFT+=("$sfile")
+    fi
+done < <(find "${PROJECT_DIR}/Sources" -name "*.swift" -print0)
+
+swiftc -target $(uname -m)-apple-macos14.0 \
+    -larchive \
+    -framework AppKit \
+    -framework UniformTypeIdentifiers \
+    -framework UserNotifications \
+    "${NON_MAIN_SWIFT[@]}" \
+    "${T47_SWIFT}" \
+    -o "${T47_DIR}/run_chain"
+
+if "${T47_DIR}/run_chain" "${T47_DIR}"; then
+    if [ -f "${T47_DIR}/DirA_Custom/arch1/step1.txt" ] && \
+       [ -f "${T47_DIR}/DirB_QuickArchiveHost/step2.txt" ] && \
+       [ ! -f "${T47_DIR}/DirA_Custom/step2.txt" ] && \
+       [ ! -d "${T47_DIR}/DirB_QuickArchiveHost/arch2" ] && \
+       [ -f "${T47_DIR}/DirC_Custom/step3.txt" ]; then
+        pass "Chain Extract To (A) -> Quick Extract (B) -> Extract To (C) succeeded with zero state leakage"
+    else
+        fail "State Leakage Chain" "Files landed in wrong directories across Extract To -> Quick Extract -> Extract To"
+    fi
+else
+    fail "State Leakage Chain Runner" "In-process chain runner exited with error"
+fi
+
+# -------------------------------------------------------------------------
+# Test 48: Unified Path Normalization & Validation (Quotes, file://, ~, Unicode, Empty/Relative Rejection)
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 48] Unified Path Normalization & Validation (Quotes, file://, ~, Empty & Relative Rejection)..."
+mkdir -p "${TEST_DIR}/t48_paths"
+T48_SWIFT="${TEST_DIR}/t48_paths/main.swift"
+cat << 'EOF' > "${T48_SWIFT}"
+import Foundation
+
+func assertTrue(_ cond: Bool, _ msg: String) {
+    if !cond {
+        fputs("Assertion failed: \(msg)\n", stderr)
+        exit(1)
+    }
+}
+
+// 1. Empty string must return "" and throw .emptyPath (NEVER resolve to currentDirectoryPath!)
+assertTrue(PathSecurity.cleanUserInputPath("") == "", "Empty path must clean to empty string")
+assertTrue(PathSecurity.cleanUserInputPath("   \n\t  ") == "", "Whitespace path must clean to empty string")
+do {
+    _ = try PathSecurity.resolveDestinationDirectoryURL("", baseDirectory: nil)
+    assertTrue(false, "Empty path must throw")
+} catch PathSecurity.UserPathError.emptyPath {
+    // Expected
+} catch {
+    assertTrue(false, "Unexpected error for empty path: \(error)")
+}
+
+// 2. Relative path without baseDirectory (UI mode) must be rejected (NEVER resolve against implicit CWD!)
+do {
+    _ = try PathSecurity.resolveDestinationDirectoryURL("RelativeFolder/Sub", baseDirectory: nil)
+    assertTrue(false, "Relative path in UI mode must throw")
+} catch PathSecurity.UserPathError.relativePathNotAllowed {
+    // Expected
+} catch {
+    assertTrue(false, "Unexpected error for relative path: \(error)")
+}
+
+// 3. Quoted file:// URL with percent-encoded spaces and trailing slash
+let quotedFileURL = "\"file:///Movies/Th%C6%B0%20m%E1%BB%A5c%20Test/\""
+let resolved1 = try! PathSecurity.resolveDestinationDirectoryURL(quotedFileURL, baseDirectory: nil)
+assertTrue(resolved1.path == "/Movies/Thư mục Test", "Quoted file:// URL failed: got \(resolved1.path)")
+
+// 4. Single-quoted path with escaped spaces and trailing slash
+let escapedPath = "'/Volumes/External Drive/Dự án\\ 2026/'"
+let resolved2 = try! PathSecurity.resolveDestinationDirectoryURL(escapedPath, baseDirectory: nil)
+assertTrue(resolved2.path == "/Volumes/External Drive/Dự án 2026", "Escaped path failed: got \(resolved2.path)")
+
+// 5. Tilde expansion
+let home = FileManager.default.homeDirectoryForCurrentUser.path
+let tildePath = "~/Downloads/Test Folder/"
+let resolved3 = try! PathSecurity.resolveDestinationDirectoryURL(tildePath, baseDirectory: nil)
+assertTrue(resolved3.path == "\(home)/Downloads/Test Folder", "Tilde expansion failed: got \(resolved3.path)")
+
+// 6. Archive filename validation: forbid '/' and '\', prevent '.zip.zip', preserve dots in folder names
+do {
+    _ = try PathSecurity.validateAndNormalizeArchiveFileName("sub/evil.zip")
+    assertTrue(false, "Hierarchical archive name must be rejected")
+} catch PathSecurity.UserPathError.invalidArchiveName {
+    // Expected
+}
+
+let normZip1 = try! PathSecurity.validateAndNormalizeArchiveFileName("MyArchive.zip.zip")
+assertTrue(normZip1 == "MyArchive.zip", "Double .zip.zip was not collapsed: \(normZip1)")
+
+let normZip2 = try! PathSecurity.validateAndNormalizeArchiveFileName("Project v1.4.1 — Tiếng Việt")
+assertTrue(normZip2 == "Project v1.4.1 — Tiếng Việt.zip", "Dots in name were not preserved: \(normZip2)")
+
+exit(0)
+EOF
+
+swiftc -target $(uname -m)-apple-macos14.0 \
+    "${PROJECT_DIR}/Sources/Core/ArchiveEntryInfo.swift" \
+    "${PROJECT_DIR}/Sources/Core/ArchiveFormat.swift" \
+    "${PROJECT_DIR}/Sources/Core/ExtractionOptions.swift" \
+    "${PROJECT_DIR}/Sources/Core/PathSecurity.swift" \
+    "${T48_SWIFT}" \
+    -o "${TEST_DIR}/test_paths_bin"
+
+if "${TEST_DIR}/test_paths_bin"; then
+    pass "PathSecurity unified normalizer passed all edge cases (empty, relative, file://, ~, quotes, Unicode, .zip.zip)"
+else
+    fail "PathSecurity Normalizer" "Failed unit assertions in test_paths.swift"
+fi
+
+# -------------------------------------------------------------------------
+# Test 49: Symlink Destination/Source Paths & Symlink Traversal Attack Defense
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 49] Symlink Destination/Source Paths & Symlink Escape Defense..."
+T49_DIR="${TEST_DIR}/t49_symlink_sec"
+mkdir -p "${T49_DIR}/RealSource/Nested" "${T49_DIR}/RealDest" "${T49_DIR}/OutsideSecret"
+echo "SOURCE_THROUGH_SYMLINK" > "${T49_DIR}/RealSource/Nested/data.txt"
+ln -s "${T49_DIR}/RealSource" "${T49_DIR}/LinkToSource"
+ln -s "${T49_DIR}/RealDest" "${T49_DIR}/LinkToDest"
+
+# 1. Compress via symlinked directory and extract to symlinked destination directory
+"${BUILD_BIN}" --compress --headless "${T49_DIR}/LinkToSource" -o "${T49_DIR}/LinkToDest/SymArchive.zip" >/dev/null 2>&1
+"${BUILD_BIN}" --extract-to --headless "${T49_DIR}/LinkToDest/SymArchive.zip" -o "${T49_DIR}/LinkToDest/Unpacked" >/dev/null 2>&1
+
+if [ -f "${T49_DIR}/RealDest/Unpacked/LinkToSource/Nested/data.txt" ]; then
+    pass "Compression & extraction through symlinked source and destination paths succeeded cleanly"
+else
+    fail "Symlink Path Support" "File missing when compressing/extracting via symlinked directories"
+fi
+
+# 2. Malicious archive with symlink escape: entry 1 creates symlink 'escape_dir -> OutsideSecret', entry 2 writes 'escape_dir/pwned.txt'
+MALICIOUS_SYMLINK_ZIP="${T49_DIR}/malicious_symlink_escape.zip"
+python3 -c "
+import zipfile, stat
+with zipfile.ZipFile('${MALICIOUS_SYMLINK_ZIP}', 'w') as z:
+    info = zipfile.ZipInfo('escape_dir')
+    info.create_system = 3
+    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    z.writestr(info, '${T49_DIR}/OutsideSecret')
+    z.writestr('escape_dir/pwned.txt', 'ESCAPED_VIA_SYMLINK')
+"
+
+mkdir -p "${T49_DIR}/SafeTarget"
+"${BUILD_BIN}" --extract-to --headless "${MALICIOUS_SYMLINK_ZIP}" -o "${T49_DIR}/SafeTarget" >/dev/null 2>&1 || true
+
+if [ -f "${T49_DIR}/OutsideSecret/pwned.txt" ]; then
+    fail "Symlink Traversal Defense" "VULNERABILITY: Archive entry wrote file outside destination through symlink!"
+else
+    pass "Symlink traversal attack blocked: entry attempting to write through symlink to outside directory rejected"
+fi
+
+# -------------------------------------------------------------------------
+# Test 50: Folder Name with Dots, Spaces, Unicode in Quick Compress & Round-Trip
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 50] Folder Name with Dots, Spaces & Unicode Round-Trip ('Project v1.4.1 — Bản thử')..."
+T50_DIR="${TEST_DIR}/t50_dots"
+FOLDER_DOTTED="${T50_DIR}/Project v1.4.1 — Bản thử"
+mkdir -p "${FOLDER_DOTTED}/Sub.v2"
+echo "DOTTED_FOLDER_CONTENT_2026" > "${FOLDER_DOTTED}/Sub.v2/readme.v1.txt"
+
+# Quick compress without -o: must produce "Project v1.4.1 — Bản thử.zip" (NOT "Project v1.4.zip")
+"${BUILD_BIN}" --compress --quick --headless "${FOLDER_DOTTED}" >/dev/null 2>&1
+EXPECTED_ZIP="${T50_DIR}/Project v1.4.1 — Bản thử.zip"
+
+if [ -f "${EXPECTED_ZIP}" ]; then
+    pass "Quick Compress preserved dots, spaces & Vietnamese Unicode in folder name ('Project v1.4.1 — Bản thử.zip')"
+else
+    fail "Dotted Folder Name" "Expected '${EXPECTED_ZIP}' was not created"
+fi
+
+# Extract back into clean folder and verify no extra wrapper and exact SHA-256 match
+mkdir -p "${T50_DIR}/verify_out"
+"${BUILD_BIN}" --extract-to --headless "${EXPECTED_ZIP}" -o "${T50_DIR}/verify_out" >/dev/null 2>&1
+if [ -f "${T50_DIR}/verify_out/Project v1.4.1 — Bản thử/Sub.v2/readme.v1.txt" ] && \
+   cmp -s "${FOLDER_DOTTED}/Sub.v2/readme.v1.txt" "${T50_DIR}/verify_out/Project v1.4.1 — Bản thử/Sub.v2/readme.v1.txt"; then
+    pass "Dotted folder round-trip preserved exact relative hierarchy and file SHA-256 without extra wrapper"
+else
+    fail "Dotted Folder Round-Trip" "Hierarchy or content mismatch after extracting dotted folder archive"
+fi
+
+# -------------------------------------------------------------------------
+# Test 51: Self-Inclusion Defense when Output ZIP is Inside Source or New Subfolder of Source
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 51] Self-Inclusion Defense (Output ZIP Inside Source Folder & Inside New Subfolder of Source)..."
+T51_DIR="${TEST_DIR}/t51_self_inclusion/MyProject"
+mkdir -p "${T51_DIR}/src"
+echo "MAIN_CODE" > "${T51_DIR}/src/main.swift"
+
+# Place output archive inside a NEW subdirectory 'build/releases/MyProject.zip' inside the source folder being compressed!
+"${BUILD_BIN}" --compress --headless "${T51_DIR}" -o "${T51_DIR}/build/releases/MyProject.zip" >/dev/null 2>&1
+
+ENTRIES_51=$(unzip -Z1 "${T51_DIR}/build/releases/MyProject.zip")
+if echo "${ENTRIES_51}" | grep -q "build/releases"; then
+    fail "New Subfolder Self-Inclusion" "Newly created destination subfolder 'build/releases' was included inside the archive!"
+else
+    pass "Self-inclusion prevented even when output ZIP is saved into a newly created subfolder inside source directory"
+fi
+
+# -------------------------------------------------------------------------
+# Test 52: Multi-Archive & Multipart Independence Across Different Directories
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 52] Multi-Archive & Same-Named Multipart Sets in Different Directories..."
+if [ -x "${SEVEN_Z_BIN}" ]; then
+    T52_DIR="${TEST_DIR}/t52_multi"
+    mkdir -p "${T52_DIR}/srcA" "${T52_DIR}/srcB" "${T52_DIR}/HostA" "${T52_DIR}/HostB"
+    dd if=/dev/urandom of="${T52_DIR}/srcA/fileA.bin" bs=1024 count=80 status=none
+    dd if=/dev/urandom of="${T52_DIR}/srcB/fileB.bin" bs=1024 count=80 status=none
+    
+    # Both multipart sets have the EXACT same base name 'data_split.7z' in two different directories!
+    (cd "${T52_DIR}/srcA" && "${SEVEN_Z_BIN}" a -v40k "${T52_DIR}/HostA/data_split.7z" fileA.bin >/dev/null)
+    (cd "${T52_DIR}/srcB" && "${SEVEN_Z_BIN}" a -v40k "${T52_DIR}/HostB/data_split.7z" fileB.bin >/dev/null)
+    
+    # Pass all volumes from both directories in a single Quick Extract invocation
+    "${BUILD_BIN}" --quick --headless "${T52_DIR}/HostA"/data_split.7z.* "${T52_DIR}/HostB"/data_split.7z.* >/dev/null 2>&1
+    
+    if [ -f "${T52_DIR}/HostA/fileA.bin" ] && [ -f "${T52_DIR}/HostB/fileB.bin" ] && \
+       [ ! -f "${T52_DIR}/HostA/fileB.bin" ] && [ ! -f "${T52_DIR}/HostB/fileA.bin" ] && \
+       [ ! -f "${T52_DIR}/HostA/fileA (1).bin" ] && [ ! -f "${T52_DIR}/HostB/fileB (1).bin" ]; then
+        pass "Same-named multipart archives in different directories extracted once each to their respective directories"
+    else
+        fail "Multi-Archive Multipart" "Multipart sets in different directories collided, skipped, or extracted multiple times"
+    fi
+fi
+
+# -------------------------------------------------------------------------
+# Test 53: Non-Destructive Conflict Handling for Existing User Directories
+# -------------------------------------------------------------------------
+echo ""
+echo "[Test 53] Non-Destructive Protection for Existing User Directories During Conflict..."
+T53_DIR="${TEST_DIR}/t53_dir_safety"
+mkdir -p "${T53_DIR}/dest/ImportantData" "${T53_DIR}/src"
+echo "PRECIOUS_USER_FILE" > "${T53_DIR}/dest/ImportantData/keep.txt"
+# Create archive where 'ImportantData' is a regular file (colliding with the existing folder 'ImportantData/')
+echo "FILE_WITH_SAME_NAME_AS_FOLDER" > "${T53_DIR}/src/ImportantData"
+(cd "${T53_DIR}/src" && zip "${T53_DIR}/collide.zip" ImportantData >/dev/null)
+
+"${BUILD_BIN}" --extract-to --headless --overwrite "${T53_DIR}/collide.zip" -o "${T53_DIR}/dest" >/dev/null 2>&1
+if [ -f "${T53_DIR}/dest/ImportantData/keep.txt" ] && [ -f "${T53_DIR}/dest/ImportantData (1)" ]; then
+    pass "Existing user directory 'ImportantData/' preserved intact; colliding file safely renamed to 'ImportantData (1)'"
+else
+    fail "User Directory Protection" "Existing user directory was harmed or colliding file not renamed"
 fi
 
 echo ""

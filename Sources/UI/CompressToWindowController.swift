@@ -7,19 +7,22 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
     
     private let sources: [URL]
     private var selectedDestinationDirectory: URL
+    private var validatedArchiveFileName: String = "Archive.zip"
     private var isConfirmed = false
     private var isCancelled = false
     
     private let nameTextField = NSTextField()
-    private let pathTextField = NSTextField()
+    private let pathTextField = DestinationPathTextField()
+    private let pathFieldEditor = DestinationPathFieldEditor()
     private let browseButton = NSButton(title: "Chọn...", target: nil, action: nil)
     private let levelPopUp = NSPopUpButton()
     private let infoLabel = NSTextField(labelWithString: "Đang tính toán dung lượng nguồn...")
     
     public init(sources: [URL]) {
-        self.sources = sources
-        let firstSource = sources.first ?? FileManager.default.homeDirectoryForCurrentUser
-        self.selectedDestinationDirectory = firstSource.deletingLastPathComponent()
+        let normalizedSources = sources.map { PathSecurity.normalizeFileURL($0) }
+        self.sources = normalizedSources
+        self.selectedDestinationDirectory = PathSecurity.defaultCompressionDirectory(for: normalizedSources)
+        self.validatedArchiveFileName = PathSecurity.defaultArchiveFileName(for: normalizedSources)
         
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 490, height: 280),
@@ -41,14 +44,30 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         fatalError("init(coder:) has not been implemented")
     }
     
+    private func applyDroppedOrSelectedFolder(_ folderURL: URL) {
+        let cleanFolder = PathSecurity.normalizeDirectoryURL(folderURL)
+        window?.endEditing(for: nil)
+        selectedDestinationDirectory = cleanFolder
+        pathTextField.stringValue = cleanFolder.path
+    }
+    
     private func setupUI() {
         guard let contentView = window?.contentView else { return }
+        
+        // Background Drop Area for Destination Folders
+        let bgView = ExtractToBackgroundView(frame: contentView.bounds)
+        bgView.autoresizingMask = [.width, .height]
+        bgView.onFolderDropped = { [weak self] folderURL in
+            self?.applyDroppedOrSelectedFolder(folderURL)
+        }
+        contentView.addSubview(bgView, positioned: .below, relativeTo: nil)
         
         // Icon
         let iconView = NSImageView(frame: NSRect(x: 20, y: 210, width: 48, height: 48))
         if sources.count == 1, let first = sources.first {
-            let isDir = (try? first.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            if isDir {
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir)
+            if exists && isDir.boolValue {
                 iconView.image = NSWorkspace.shared.icon(for: .folder)
             } else {
                 let ext = first.pathExtension
@@ -86,14 +105,17 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         contentView.addSubview(nameTitle)
         
         nameTextField.frame = NSRect(x: 160, y: 173, width: 310, height: 22)
-        let defaultName: String
-        if sources.count == 1, let first = sources.first {
-            let base = first.deletingPathExtension().lastPathComponent
-            defaultName = base.isEmpty ? "Archive.zip" : "\(base).zip"
-        } else {
-            defaultName = "Archive.zip"
-        }
-        nameTextField.stringValue = defaultName
+        nameTextField.stringValue = validatedArchiveFileName
+        nameTextField.isEditable = true
+        nameTextField.isSelectable = true
+        nameTextField.isBezeled = true
+        nameTextField.bezelStyle = .roundedBezel
+        nameTextField.lineBreakMode = .byClipping
+        nameTextField.cell?.wraps = false
+        nameTextField.cell?.isScrollable = true
+        nameTextField.placeholderString = "Nhập tên file nén (.zip)..."
+        nameTextField.target = self
+        nameTextField.action = #selector(compressClicked)
         contentView.addSubview(nameTextField)
         
         // Destination directory
@@ -111,9 +133,15 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         pathTextField.lineBreakMode = .byClipping
         pathTextField.cell?.wraps = false
         pathTextField.cell?.isScrollable = true
-        pathTextField.placeholderString = "Đường dẫn thư mục lưu..."
+        pathTextField.placeholderString = "Nhập, dán hoặc kéo thả thư mục lưu..."
         pathTextField.target = self
         pathTextField.action = #selector(compressClicked)
+        pathTextField.onFolderDropped = { [weak self] folderURL in
+            self?.applyDroppedOrSelectedFolder(folderURL)
+        }
+        pathFieldEditor.onFolderDropped = { [weak self] folderURL in
+            self?.applyDroppedOrSelectedFolder(folderURL)
+        }
         contentView.addSubview(pathTextField)
         
         browseButton.frame = NSRect(x: 388, y: 104, width: 82, height: 28)
@@ -150,6 +178,14 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         contentView.addSubview(compressButton)
     }
     
+    public func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
+        if (client as AnyObject) === pathTextField {
+            pathFieldEditor.isFieldEditor = true
+            return pathFieldEditor
+        }
+        return nil
+    }
+    
     public override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         NSApp.setActivationPolicy(.regular)
@@ -170,8 +206,9 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
             let fm = FileManager.default
             
             for src in self.sources {
-                let isDir = (try? src.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                if isDir {
+                var isDir: ObjCBool = false
+                let exists = fm.fileExists(atPath: src.path, isDirectory: &isDir)
+                if exists && isDir.boolValue {
                     if let enumerator = fm.enumerator(at: src, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey], options: [.skipsHiddenFiles], errorHandler: nil) {
                         for case let fileURL as URL in enumerator {
                             let isSubDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
@@ -182,7 +219,7 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
                             }
                         }
                     }
-                } else {
+                } else if exists {
                     let size = (try? src.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
                     totalBytes += Int64(size)
                     fileCount += 1
@@ -205,6 +242,7 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
     }
     
     @objc private func browseClicked() {
+        window?.endEditing(for: nil)
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -216,13 +254,11 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
         if let window = self.window {
             panel.beginSheetModal(for: window) { [weak self] response in
                 if response == .OK, let url = panel.url {
-                    self?.selectedDestinationDirectory = url
-                    self?.pathTextField.stringValue = url.path
+                    self?.applyDroppedOrSelectedFolder(url)
                 }
             }
         } else if panel.runModal() == .OK, let url = panel.url {
-            selectedDestinationDirectory = url
-            pathTextField.stringValue = url.path
+            applyDroppedOrSelectedFolder(url)
         }
     }
     
@@ -246,21 +282,44 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
     }
     
     private func validateAndProceed() {
-        let rawPath = pathTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rawPath.isEmpty else {
+        window?.endEditing(for: nil)
+        
+        // 1. Validate Archive Filename (forbid hierarchical separators and empty names)
+        let normalizedArchiveName: String
+        do {
+            normalizedArchiveName = try PathSecurity.validateAndNormalizeArchiveFileName(nameTextField.stringValue)
+            nameTextField.stringValue = normalizedArchiveName
+            self.validatedArchiveFileName = normalizedArchiveName
+        } catch {
             let alert = NSAlert()
-            alert.messageText = "Đường dẫn không hợp lệ"
-            alert.informativeText = "Vui lòng nhập đường dẫn thư mục lưu file nén."
+            alert.messageText = "Tên file nén không hợp lệ"
+            alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
-            pathTextField.becomeFirstResponder()
+            window?.makeFirstResponder(nameTextField)
             return
         }
         
-        let expandedPath = (rawPath as NSString).expandingTildeInPath
-        let targetURL = URL(fileURLWithPath: expandedPath).standardized
+        // 2. Validate Destination Directory Path
+        let rawPath = pathTextField.stringValue
+        let targetURL: URL
+        do {
+            targetURL = try PathSecurity.resolveDestinationDirectoryURL(rawPath, baseDirectory: nil)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Đường dẫn không hợp lệ"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            window?.makeFirstResponder(pathTextField)
+            return
+        }
+        
+        pathTextField.stringValue = targetURL.path
         
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -275,12 +334,25 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
                 alert.addButton(withTitle: "OK")
                 NSApp.activate(ignoringOtherApps: true)
                 alert.runModal()
-                pathTextField.becomeFirstResponder()
+                window?.makeFirstResponder(pathTextField)
                 return
             }
             self.selectedDestinationDirectory = targetURL
             executeProceed()
         } else {
+            var isSymlink = false
+            if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: nil, isSymlink: &isSymlink) && isSymlink {
+                let alert = NSAlert()
+                alert.messageText = "Đường dẫn không hợp lệ"
+                alert.informativeText = "Đường dẫn \"\(targetURL.lastPathComponent)\" là một liên kết tượng trưng (symlink) bị hỏng.\nVui lòng chọn thư mục khác."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "OK")
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+                window?.makeFirstResponder(pathTextField)
+                return
+            }
+            
             let alert = NSAlert()
             alert.messageText = "Thư mục chưa tồn tại"
             alert.informativeText = "Thư mục lưu:\n\(targetURL.path)\n\nchưa tồn tại. Bạn có muốn tạo thư mục này không?"
@@ -303,28 +375,41 @@ public final class CompressToWindowController: NSWindowController, NSWindowDeleg
                     errAlert.addButton(withTitle: "OK")
                     NSApp.activate(ignoringOtherApps: true)
                     errAlert.runModal()
-                    pathTextField.becomeFirstResponder()
+                    window?.makeFirstResponder(pathTextField)
                 }
             } else {
-                pathTextField.becomeFirstResponder()
+                window?.makeFirstResponder(pathTextField)
             }
         }
     }
     
     private func executeProceed() {
-        var rawName = nameTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if rawName.isEmpty {
-            rawName = "Archive.zip"
-        }
-        if !rawName.lowercased().hasSuffix(".zip") {
-            rawName += ".zip"
+        let destDir = PathSecurity.normalizeDirectoryURL(selectedDestinationDirectory)
+        let destinationURL = destDir.appendingPathComponent(validatedArchiveFileName, isDirectory: false)
+        
+        // Prevent colliding with an existing directory named "<Archive>.zip"
+        var isExistingDestDir: ObjCBool = false
+        var isExistingDestSymlink: Bool = false
+        if PathSecurity.itemExistsIncludingSymlink(at: destinationURL, isDirectory: &isExistingDestDir, isSymlink: &isExistingDestSymlink),
+           isExistingDestDir.boolValue && !isExistingDestSymlink {
+            let alert = NSAlert()
+            alert.messageText = "Trùng tên với thư mục hiện có"
+            alert.informativeText = "Tại thư mục đích đã tồn tại một thư mục có tên \"\(validatedArchiveFileName)\".\nVui lòng đặt tên file nén khác."
+            alert.alertStyle = .critical
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            window?.makeFirstResponder(nameTextField)
+            return
         }
         
-        let destinationURL = selectedDestinationDirectory.appendingPathComponent(rawName)
         let selectedLevel = (levelPopUp.selectedItem?.representedObject as? CompressionLevel) ?? .normal
         
         isConfirmed = true
+        let confirmCallback = onConfirm
+        onConfirm = nil
+        window?.orderOut(nil)
+        confirmCallback?(destinationURL, selectedLevel)
         window?.close()
-        onConfirm?(destinationURL, selectedLevel)
     }
 }

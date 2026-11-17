@@ -7,18 +7,25 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     public static let categorySuccessID = "UPACKX_SUCCESS"
     public static let actionShowInFinderID = "SHOW_IN_FINDER"
     
+    private var canUseNotificationCenter: Bool {
+        return Bundle.main.bundleIdentifier != nil && Bundle.main.bundlePath.hasSuffix(".app")
+    }
+    
     private override init() {
         super.init()
+        guard canUseNotificationCenter else { return }
         setupNotificationCategories()
         requestAuthorization()
         UNUserNotificationCenter.current().delegate = self
     }
     
     public func requestAuthorization() {
+        guard canUseNotificationCenter else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
     
     private func setupNotificationCategories() {
+        guard canUseNotificationCenter else { return }
         let showInFinderAction = UNNotificationAction(
             identifier: Self.actionShowInFinderID,
             title: "Xem trong Finder",
@@ -34,6 +41,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifySuccess(archiveName: String, destinationURL: URL, extractedCount: Int, elapsedTime: TimeInterval) {
+        guard canUseNotificationCenter else { return }
         let (title, body) = GoogleDriveHelper.completionMessage(
             for: archiveName,
             destinationURL: destinationURL,
@@ -53,6 +61,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyBatchSummary(completed: Int, failed: Int, lastDestinationURL: URL? = nil) {
+        guard canUseNotificationCenter else { return }
         let content = UNMutableNotificationContent()
         content.title = "Hoàn tất giải nén hàng loạt"
         if failed == 0 {
@@ -73,6 +82,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyFailure(archiveName: String, error: Error) {
+        guard canUseNotificationCenter else { return }
         let content = UNMutableNotificationContent()
         content.title = "Giải nén thất bại"
         content.body = "\(archiveName): \(error.localizedDescription)"
@@ -83,6 +93,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyCompressionSuccess(archiveURL: URL, totalItems: Int, archiveSize: Int64, elapsedTime: TimeInterval) {
+        guard canUseNotificationCenter else { return }
         let content = UNMutableNotificationContent()
         content.title = "Nén hoàn tất"
         let mb = Double(archiveSize) / 1_048_576.0
@@ -103,6 +114,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyCompressionFailure(archiveName: String, error: Error) {
+        guard canUseNotificationCenter else { return }
         let content = UNMutableNotificationContent()
         content.title = "Nén thất bại"
         content.body = "\(archiveName): \(error.localizedDescription)"
@@ -113,6 +125,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     }
     
     public func notifyUpdateAvailable(version: String, releaseNotes: String) {
+        guard canUseNotificationCenter else { return }
         let content = UNMutableNotificationContent()
         content.title = "Đã có bản cập nhật mới (v\(version))"
         content.body = "UpackX v\(version) đã sẵn sàng. Nhấn để xem chi tiết và tải về."

@@ -16,7 +16,8 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
         }
     }
     
-    public func inspect(archiveURL: URL, password: String?) throws -> ArchiveInfo {
+    public func inspect(archiveURL rawArchiveURL: URL, password: String?) throws -> ArchiveInfo {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
         guard FileManager.default.fileExists(atPath: archiveURL.path) else {
             throw ExtractionError.fileNotFound(archiveURL)
         }
@@ -52,7 +53,8 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                 if r == ARCHIVE_WARN {
                     // Non-fatal warning, can continue
                 } else {
-                    if msg.lowercased().contains("passphrase") || msg.lowercased().contains("password") || msg.lowercased().contains("encrypt") {
+                    let lower = msg.lowercased()
+                    if lower.contains("passphrase") || lower.contains("password") || lower.contains("encrypt") {
                         isEncrypted = true
                         break
                     }
@@ -103,6 +105,10 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             }
         }
         
+        if archive_read_has_encrypted_entries(a) > 0 {
+            isEncrypted = true
+        }
+        
         let format = ArchiveFormat.detect(from: archiveURL)
         return ArchiveInfo(
             fileURL: archiveURL,
@@ -114,32 +120,60 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
         )
     }
     
-    public func extract(archiveURL: URL,
+    public func extract(archiveURL rawArchiveURL: URL,
                         options: ExtractionOptions,
                         progress: @escaping (ExtractionProgress) -> Bool) throws -> ExtractionResult {
-        guard FileManager.default.fileExists(atPath: archiveURL.path) else {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
+        let fm = FileManager.default
+        
+        var isArchiveDir: ObjCBool = false
+        guard fm.fileExists(atPath: archiveURL.path, isDirectory: &isArchiveDir), !isArchiveDir.boolValue else {
             throw ExtractionError.fileNotFound(archiveURL)
         }
         
         let startTime = Date()
-        let fm = FileManager.default
+        let baseDest = PathSecurity.normalizeDirectoryURL(options.destinationDirectory)
         
-        // 1. Determine destination root
-        var destDir = options.destinationDirectory
-        if options.createEnclosingFolder {
-            let folderName = archiveURL.deletingPathExtension().lastPathComponent
-            destDir = destDir.appendingPathComponent(folderName, isDirectory: true)
+        // Verify base destination is not an existing regular file
+        var isBaseDestDir: ObjCBool = false
+        var isBaseDestSymlink: Bool = false
+        if PathSecurity.itemExistsIncludingSymlink(at: baseDest, isDirectory: &isBaseDestDir, isSymlink: &isBaseDestSymlink) {
+            if isBaseDestSymlink {
+                var targetIsDir: ObjCBool = false
+                if !fm.fileExists(atPath: baseDest.path, isDirectory: &targetIsDir) || !targetIsDir.boolValue {
+                    throw ExtractionError.writeFailed("Đường dẫn đích '\(baseDest.path)' là một liên kết tượng trưng (symlink) không trỏ tới thư mục hợp lệ.")
+                }
+            } else if !isBaseDestDir.boolValue {
+                throw ExtractionError.writeFailed("Đường dẫn đích '\(baseDest.path)' đã tồn tại nhưng là một tệp tin, không phải thư mục.")
+            }
         }
         
-        try fm.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
-        
-        // 2. Pre-inspect for total byte count if possible
+        // 1. Pre-inspect archive before creating any directories on disk
         var totalBytesExpected: Int64? = nil
         var totalEntriesExpected: Int? = nil
+        var inspectedEntries: [ArchiveEntryInfo] = []
+        
         if let info = try? inspect(archiveURL: archiveURL, password: options.password) {
+            if info.isEncrypted && (options.password == nil || options.password?.isEmpty == true) {
+                throw ExtractionError.passwordRequired
+            }
             totalBytesExpected = info.totalUncompressedSize > 0 ? info.totalUncompressedSize : nil
             totalEntriesExpected = info.totalEntries > 0 ? info.totalEntries : nil
+            inspectedEntries = info.entries
         }
+        
+        // 2. Resolve effective extraction directory (preventing duplicate Video/Video/ wrappers)
+        let resolvedDest = PathSecurity.resolveEffectiveExtractionDirectory(
+            archiveURL: archiveURL,
+            options: options,
+            entries: inspectedEntries
+        )
+        let destDir = resolvedDest.extractionRoot
+        let reportedDestination = resolvedDest.reportedDestination
+        let createdWrapper = resolvedDest.createdWrapperDirectory
+        let wrapperExistedBefore = createdWrapper.map { fm.fileExists(atPath: $0.path) } ?? true
+        
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
         
         // 3. Initialize libarchive reader
         guard let a = archive_read_new() else {
@@ -165,11 +199,19 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
         var skippedFilesCount = 0
         var totalBytesExtracted: Int64 = 0
         var currentPartialURL: URL? = nil
+        var extractionSucceeded = false
         
         defer {
             // Clean up any remaining temporary partial file
             if let partial = currentPartialURL {
                 try? fm.removeItem(at: partial)
+            }
+            // If extraction failed or was cancelled before extracting any files, remove newly created empty wrapper
+            if !extractionSucceeded && extractedFilesCount == 0,
+               let wrapper = createdWrapper, !wrapperExistedBefore {
+                if let contents = try? fm.contentsOfDirectory(atPath: wrapper.path), contents.isEmpty {
+                    try? fm.removeItem(at: wrapper)
+                }
             }
         }
         
@@ -196,6 +238,10 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             
             guard let entry = entryPtr else { continue }
             
+            if archive_entry_is_encrypted(entry) != 0 && (options.password == nil || options.password?.isEmpty == true) {
+                throw ExtractionError.passwordRequired
+            }
+            
             let rawPath: String
             if let pUtf8 = archive_entry_pathname_utf8(entry) {
                 rawPath = String(cString: pUtf8)
@@ -205,7 +251,7 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                 continue
             }
             
-            // Validate against Zip-Slip
+            // Validate against Zip-Slip and symlink escape
             let targetURL: URL
             do {
                 targetURL = try PathSecurity.resolveSafeDestinationURL(for: rawPath, in: destDir)
@@ -213,8 +259,17 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                 throw ExtractionError.pathSecurityViolation("Phát hiện đường dẫn không an toàn: \(rawPath)")
             }
             
+            // Skip root "." or "./" entries that resolve to destDir itself
+            if targetURL.standardizedFileURL.path == destDir.standardizedFileURL.path {
+                continue
+            }
+            
+            if PathSecurity.isInternalStagingArtifact(name: targetURL.lastPathComponent) {
+                continue
+            }
+            
             let fileType = archive_entry_filetype(entry)
-            let isDir = (fileType & AE_IFDIR) == AE_IFDIR || rawPath.hasSuffix("/")
+            let isDir = (fileType & AE_IFDIR) == AE_IFDIR || rawPath.hasSuffix("/") || rawPath.hasSuffix("\\")
             
             // Check cancellation before processing entry
             let currentProgress = ExtractionProgress(
@@ -233,82 +288,110 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             
             if isDir {
                 var isExistingDir: ObjCBool = false
-                if fm.fileExists(atPath: targetURL.path, isDirectory: &isExistingDir) {
-                    if !isExistingDir.boolValue {
-                        try? fm.removeItem(at: targetURL)
-                        try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+                var isExistingSymlink: Bool = false
+                if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: &isExistingDir, isSymlink: &isExistingSymlink) {
+                    if isExistingSymlink {
+                        // Verify symlink does not point outside destDir
+                        let resolvedLink = PathSecurity.canonicalPath(for: targetURL, followSymlinks: true)
+                        let canonicalDest = PathSecurity.canonicalPath(for: destDir, followSymlinks: true)
+                        if !PathSecurity.isCanonicallyContained(path: resolvedLink, within: canonicalDest) {
+                            throw ExtractionError.pathSecurityViolation("Thư mục đích chứa symlink trỏ ra ngoài phạm vi an toàn: \(rawPath)")
+                        }
+                    } else if isExistingDir.boolValue {
+                        // Directory already exists: preserve it and merge contents safely
+                    } else {
+                        // A regular file already exists at this directory path: never delete user file silently!
+                        throw ExtractionError.writeFailed("Không thể tạo thư mục '\(targetURL.lastPathComponent)' vì đã có một tệp tin trùng tên tại đích.")
                     }
-                    // If directory already exists, preserve it and merge contents safely
                 } else {
                     try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
                 }
                 continue
             }
             
+            // Ensure parent directory exists and re-verify symlink containment on disk
+            let parentDir = targetURL.deletingLastPathComponent()
+            var isParentDir: ObjCBool = false
+            var isParentSymlink: Bool = false
+            if PathSecurity.itemExistsIncludingSymlink(at: parentDir, isDirectory: &isParentDir, isSymlink: &isParentSymlink) {
+                if !isParentDir.boolValue && !isParentSymlink {
+                    throw ExtractionError.writeFailed("Không thể tạo thư mục cha '\(parentDir.lastPathComponent)' vì đã có một tệp tin trùng tên.")
+                }
+            } else {
+                try fm.createDirectory(at: parentDir, withIntermediateDirectories: true, attributes: nil)
+            }
+            
+            // Re-validate after parentDir exists on disk to catch any symlink intermediate traversal
+            do {
+                _ = try PathSecurity.resolveSafeDestinationURL(for: rawPath, in: destDir)
+            } catch {
+                throw ExtractionError.pathSecurityViolation("Phát hiện đường dẫn thoát khỏi thư mục đích qua symlink: \(rawPath)")
+            }
+            
             // Symlink handling
             if (fileType & AE_IFLNK) == AE_IFLNK {
                 if let symlinkTargetC = archive_entry_symlink(entry) {
                     let symlinkTarget = String(cString: symlinkTargetC)
-                    // Check if parent directory exists
-                    let parentDir = targetURL.deletingLastPathComponent()
-                    try fm.createDirectory(at: parentDir, withIntermediateDirectories: true, attributes: nil)
                     
-                    if fm.fileExists(atPath: targetURL.path) {
-                        try? fm.removeItem(at: targetURL)
+                    var finalSymlinkURL = targetURL
+                    var isTargetDir: ObjCBool = false
+                    var isTargetSymlink: Bool = false
+                    if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: &isTargetDir, isSymlink: &isTargetSymlink) {
+                        if isTargetDir.boolValue && !isTargetSymlink {
+                            // Never delete an existing directory! Rename the conflicting symlink
+                            finalSymlinkURL = PathSecurity.generateNonConflictingURL(for: targetURL)
+                        } else {
+                            let action = try resolveConflictAction(
+                                for: targetURL,
+                                options: options,
+                                currentDecision: &currentConflictDecision
+                            )
+                            switch action {
+                            case .cancel:
+                                throw ExtractionError.cancelled
+                            case .skip:
+                                skippedFilesCount += 1
+                                continue
+                            case .rename:
+                                finalSymlinkURL = PathSecurity.generateNonConflictingURL(for: targetURL)
+                            case .overwrite:
+                                try? fm.removeItem(at: targetURL)
+                                finalSymlinkURL = targetURL
+                            }
+                        }
                     }
-                    try? fm.createSymbolicLink(atPath: targetURL.path, withDestinationPath: symlinkTarget)
+                    
+                    try fm.createSymbolicLink(atPath: finalSymlinkURL.path, withDestinationPath: symlinkTarget)
+                    extractedFilesCount += 1
                 }
                 continue
             }
             
-            // Ensure parent directory exists
-            let parentDir = targetURL.deletingLastPathComponent()
-            try fm.createDirectory(at: parentDir, withIntermediateDirectories: true, attributes: nil)
-            
-            // Conflict handling
+            // Conflict handling for regular files
             var finalDestinationURL = targetURL
             var isTargetDirectory: ObjCBool = false
-            if fm.fileExists(atPath: targetURL.path, isDirectory: &isTargetDirectory) {
-                if isTargetDirectory.boolValue {
-                    // Path is an existing directory: merge/preserve by auto-renaming the conflicting file
-                    finalDestinationURL = generateNonConflictingURL(for: targetURL)
+            var isTargetSymlink: Bool = false
+            if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: &isTargetDirectory, isSymlink: &isTargetSymlink) {
+                if isTargetDirectory.boolValue && !isTargetSymlink {
+                    // Path is an existing user directory: never delete it, auto-rename the incoming file
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
                 } else {
-                    let action: ConflictAction
-                    if let activeDecision = currentConflictDecision, activeDecision.applyToAll {
-                        action = activeDecision.action
-                    } else {
-                    switch options.conflictStrategy {
-                    case .overwrite:
-                        action = .overwrite
+                    let action = try resolveConflictAction(
+                        for: targetURL,
+                        options: options,
+                        currentDecision: &currentConflictDecision
+                    )
+                    switch action {
+                    case .cancel:
+                        throw ExtractionError.cancelled
                     case .skip:
-                        action = .skip
+                        skippedFilesCount += 1
+                        continue
                     case .rename:
-                        action = .rename
-                    case .ask:
-                        if let resolver = options.conflictResolver {
-                            let decision = resolver(targetURL)
-                            if decision.applyToAll {
-                                currentConflictDecision = decision
-                            }
-                            action = decision.action
-                        } else {
-                            // If conflict cannot be prompted interactively, skip the file safely (Requirement 0.3)
-                            action = .skip
-                        }
+                        finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
+                    case .overwrite:
+                        finalDestinationURL = targetURL
                     }
-                }
-                
-                switch action {
-                case .cancel:
-                    throw ExtractionError.cancelled
-                case .skip:
-                    skippedFilesCount += 1
-                    continue
-                case .rename:
-                    finalDestinationURL = generateNonConflictingURL(for: targetURL)
-                case .overwrite:
-                    finalDestinationURL = targetURL
-                }
                 }
             }
             
@@ -317,8 +400,8 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             let tempPartURL = parentDir.appendingPathComponent(tempPartName)
             currentPartialURL = tempPartURL
             
-            // Open file descriptor for writing
-            let fd = open(tempPartURL.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            // Open file descriptor for writing (O_EXCL / O_NOFOLLOW for safety)
+            let fd = open(tempPartURL.path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
             if fd < 0 {
                 let errDesc = String(cString: strerror(errno))
                 throw ExtractionError.writeFailed("Không thể tạo file tạm: \(tempPartURL.path) (\(errDesc))")
@@ -340,6 +423,10 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
                     if dataRes != ARCHIVE_OK {
                         let msg = archive_error_string(a).flatMap { String(cString: $0) } ?? "Lỗi đọc dữ liệu"
                         close(fd)
+                        let lower = msg.lowercased()
+                        if lower.contains("passphrase") || lower.contains("password") || lower.contains("encrypt") {
+                            throw ExtractionError.passwordRequired
+                        }
                         throw ExtractionError.corruptedArchive(msg)
                     }
                     
@@ -382,7 +469,7 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             }
             
             if writeSucceeded {
-                // Safely commit file with cloud/virtual mount fallback
+                // Safely commit file with atomic replacement & rollback
                 try GoogleDriveHelper.safeCommitFile(from: tempPartURL, to: finalDestinationURL)
                 currentPartialURL = nil
                 
@@ -403,10 +490,11 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
             }
         }
         
+        extractionSucceeded = true
         let elapsed = Date().timeIntervalSince(startTime)
         return ExtractionResult(
             archiveURL: archiveURL,
-            destinationURL: destDir,
+            destinationURL: reportedDestination,
             extractedCount: extractedFilesCount,
             skippedCount: skippedFilesCount,
             totalBytes: totalBytesExtracted,
@@ -414,19 +502,32 @@ public final class LibarchiveExtractor: ArchiveExtractorProtocol {
         )
     }
     
-    private func generateNonConflictingURL(for fileURL: URL) -> URL {
-        let parent = fileURL.deletingLastPathComponent()
-        let ext = fileURL.pathExtension
-        let base = fileURL.deletingPathExtension().lastPathComponent
-        
-        var counter = 1
-        var candidate: URL
-        repeat {
-            let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
-            candidate = parent.appendingPathComponent(newName)
-            counter += 1
-        } while FileManager.default.fileExists(atPath: candidate.path)
-        
-        return candidate
+    private func resolveConflictAction(
+        for targetURL: URL,
+        options: ExtractionOptions,
+        currentDecision: inout ConflictDecision?
+    ) throws -> ConflictAction {
+        if let activeDecision = currentDecision, activeDecision.applyToAll {
+            return activeDecision.action
+        }
+        switch options.conflictStrategy {
+        case .overwrite:
+            return .overwrite
+        case .skip:
+            return .skip
+        case .rename:
+            return .rename
+        case .ask:
+            if let resolver = options.conflictResolver {
+                let decision = resolver(targetURL)
+                if decision.applyToAll {
+                    currentDecision = decision
+                }
+                return decision.action
+            } else {
+                // Non-interactive fallback: skip safely, never overwrite silently
+                return .skip
+            }
+        }
     }
 }

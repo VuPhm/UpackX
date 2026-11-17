@@ -1,7 +1,7 @@
 import Foundation
 
 /// Specialized backend wrapping the standalone `7zz` binary.
-/// Used for complex solid 7Z, password-encrypted headers, and multipart volumes.
+/// Used for complex solid 7Z, RAR5, password-encrypted headers, and multipart volumes.
 public final class SevenZipExtractor: ArchiveExtractorProtocol {
     public let name = "7-Zip (7zz CLI Engine)"
     
@@ -35,14 +35,18 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
     public func canHandle(format: ArchiveFormat, archiveURL: URL) -> Bool {
         guard isAvailable else { return false }
         switch format {
-        case .sevenZip, .rar, .zip, .tar, .tarGz, .tarBz2, .tarXz:
+        case .sevenZip, .rar, .zip, .tar, .iso, .cab:
             return true
         default:
             return false
         }
     }
     
-    public func inspect(archiveURL: URL, password: String?) throws -> ArchiveInfo {
+    public func inspect(archiveURL rawArchiveURL: URL, password: String?) throws -> ArchiveInfo {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
+        guard FileManager.default.fileExists(atPath: archiveURL.path) else {
+            throw ExtractionError.fileNotFound(archiveURL)
+        }
         guard let binURL = bundledBinaryURL else {
             throw ExtractionError.generic("Không tìm thấy binary 7zz.")
         }
@@ -63,8 +67,9 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         process.arguments = args
         
         let pipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = errPipe
         
         try process.run()
         
@@ -74,15 +79,26 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         }
         
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         
-        let output = String(data: data, encoding: .utf8) ?? ""
+        let output = (String(data: data, encoding: .utf8) ?? "").replacingOccurrences(of: "\r\n", with: "\n")
+        let errOutput = String(data: errData, encoding: .utf8) ?? ""
+        let combinedLower = (output + "\n" + errOutput).lowercased()
+        
+        var isEncrypted = false
+        if combinedLower.contains("wrong password") || combinedLower.contains("enter password") || combinedLower.contains("encrypted archive") || combinedLower.contains("can not open encrypted archive") {
+            isEncrypted = true
+        }
         
         var entries: [ArchiveEntryInfo] = []
         var totalBytes: Int64 = 0
-        var isEncrypted = false
         
-        let blocks = output.components(separatedBy: "\n\n")
+        // Only parse entry blocks after the "----------" separator line
+        let partsAfterSeparator = output.components(separatedBy: "----------\n")
+        let entriesSection = partsAfterSeparator.count > 1 ? partsAfterSeparator.dropFirst().joined(separator: "----------\n") : output
+        
+        let blocks = entriesSection.components(separatedBy: "\n\n")
         for block in blocks {
             var path: String?
             var size: Int64 = 0
@@ -97,13 +113,15 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
                     size = Int64(line.dropFirst("Size = ".count)) ?? 0
                 } else if line.hasPrefix("Folder = +") {
                     isDir = true
+                } else if line.hasPrefix("Attributes = D") || line.contains("Attributes = ") && line.contains("D") {
+                    isDir = true
                 } else if line.hasPrefix("Encrypted = +") {
                     encrypted = true
                     isEncrypted = true
                 }
             }
             
-            if let p = path, p != archiveURL.path {
+            if let p = path, !p.isEmpty, p != archiveURL.path {
                 entries.append(ArchiveEntryInfo(
                     path: p,
                     uncompressedSize: size,
@@ -125,30 +143,65 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         )
     }
     
-    public func extract(archiveURL: URL,
+    public func extract(archiveURL rawArchiveURL: URL,
                         options: ExtractionOptions,
                         progress: @escaping (ExtractionProgress) -> Bool) throws -> ExtractionResult {
+        let archiveURL = PathSecurity.normalizeFileURL(rawArchiveURL)
+        let fm = FileManager.default
+        
+        var isArchiveDir: ObjCBool = false
+        guard fm.fileExists(atPath: archiveURL.path, isDirectory: &isArchiveDir), !isArchiveDir.boolValue else {
+            throw ExtractionError.fileNotFound(archiveURL)
+        }
+        
         guard let binURL = bundledBinaryURL else {
             throw ExtractionError.generic("Không tìm thấy binary 7zz.")
         }
         
         let startTime = Date()
-        let fm = FileManager.default
+        let baseDest = PathSecurity.normalizeDirectoryURL(options.destinationDirectory)
         
-        var destDir = options.destinationDirectory
-        if options.createEnclosingFolder {
-            let folderName = archiveURL.deletingPathExtension().lastPathComponent
-            destDir = destDir.appendingPathComponent(folderName, isDirectory: true)
+        // Verify baseDest is not an existing regular file
+        var isBaseDestDir: ObjCBool = false
+        var isBaseDestSymlink: Bool = false
+        if PathSecurity.itemExistsIncludingSymlink(at: baseDest, isDirectory: &isBaseDestDir, isSymlink: &isBaseDestSymlink) {
+            if isBaseDestSymlink {
+                var targetIsDir: ObjCBool = false
+                if !fm.fileExists(atPath: baseDest.path, isDirectory: &targetIsDir) || !targetIsDir.boolValue {
+                    throw ExtractionError.writeFailed("Đường dẫn đích '\(baseDest.path)' là một liên kết tượng trưng (symlink) không trỏ tới thư mục hợp lệ.")
+                }
+            } else if !isBaseDestDir.boolValue {
+                throw ExtractionError.writeFailed("Đường dẫn đích '\(baseDest.path)' đã tồn tại nhưng là một tệp tin, không phải thư mục.")
+            }
         }
-        try fm.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
         
-        // Use a hidden temporary staging directory in destination to ensure atomic integrity and true interactive conflict resolution (.ask)
-        let stagingDir = destDir.appendingPathComponent(".upackx_staging_\(UUID().uuidString)", isDirectory: true)
+        let baseDestExistedBefore = fm.fileExists(atPath: baseDest.path)
+        try fm.createDirectory(at: baseDest, withIntermediateDirectories: true, attributes: nil)
+        
+        // Use a hidden temporary staging directory inside baseDest to ensure atomic integrity and conflict resolution
+        let stagingDir = baseDest.appendingPathComponent(".upackx_staging_\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true, attributes: nil)
+        
+        var createdWrapperDir: URL? = nil
+        var wrapperExistedBefore = true
+        var extractionSucceeded = false
+        var extractedCount = 0
         
         defer {
             // Always ensure the temporary staging folder is cleaned up
             try? fm.removeItem(at: stagingDir)
+            if !extractionSucceeded && extractedCount == 0 {
+                if let wrapper = createdWrapperDir, !wrapperExistedBefore {
+                    if let contents = try? fm.contentsOfDirectory(atPath: wrapper.path), contents.isEmpty {
+                        try? fm.removeItem(at: wrapper)
+                    }
+                }
+                if !baseDestExistedBefore {
+                    if let contents = try? fm.contentsOfDirectory(atPath: baseDest.path), contents.isEmpty {
+                        try? fm.removeItem(at: baseDest)
+                    }
+                }
+            }
         }
         
         let process = Process()
@@ -246,7 +299,7 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
         
         if process.terminationStatus != 0 {
             let lower = allOutput.lowercased()
-            if lower.contains("wrong password") || lower.contains("enter password") || lower.contains("encrypted archive") {
+            if lower.contains("wrong password") || lower.contains("enter password") || lower.contains("encrypted archive") || lower.contains("can not open encrypted archive") {
                 throw ExtractionError.passwordRequired
             }
             if process.terminationStatus == 2 {
@@ -255,48 +308,84 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
             throw ExtractionError.generic("7zz hoàn thành với lỗi (exit code \(process.terminationStatus))")
         }
         
+        // Determine effective destination directory after staging (avoiding duplicate Video/Video/ wrapper)
+        let destDir: URL
+        let reportedDestination: URL
+        if options.createEnclosingFolder {
+            let enclosingName = PathSecurity.archiveBaseName(for: archiveURL)
+            if PathSecurity.stagingDirectoryHasSingleRootDirectory(at: stagingDir, matching: enclosingName) {
+                destDir = baseDest
+                reportedDestination = baseDest.appendingPathComponent(enclosingName, isDirectory: true)
+            } else if PathSecurity.normalizedFolderNameEqual(baseDest.lastPathComponent, enclosingName) {
+                destDir = baseDest
+                reportedDestination = baseDest
+            } else {
+                let wrapper = baseDest.appendingPathComponent(enclosingName, isDirectory: true)
+                wrapperExistedBefore = fm.fileExists(atPath: wrapper.path)
+                createdWrapperDir = wrapper
+                try fm.createDirectory(at: wrapper, withIntermediateDirectories: true, attributes: nil)
+                destDir = wrapper
+                reportedDestination = wrapper
+            }
+        } else {
+            destDir = baseDest
+            reportedDestination = baseDest
+        }
+        
         // Commit extracted files from staging to destDir with full conflict resolution and Zip-Slip defense
         var currentConflictDecision: ConflictDecision? = nil
-        var extractedCount = 0
         var skippedCount = 0
         var totalBytesExtracted: Int64 = 0
         
-        guard let enumerator = fm.enumerator(at: stagingDir, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: []) else {
+        guard let enumerator = fm.enumerator(
+            at: stagingDir,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
+            options: []
+        ) else {
             throw ExtractionError.generic("Không thể duyệt thư mục tạm của 7zz.")
         }
         
         var dirURLs: [URL] = []
-        var fileURLs: [URL] = []
+        var fileAndSymlinkURLs: [URL] = []
         
         while let itemURL = enumerator.nextObject() as? URL {
-            let isDir = (try? itemURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            if isDir {
-                dirURLs.append(itemURL)
-            } else {
-                fileURLs.append(itemURL)
+            var st = stat()
+            if lstat(itemURL.path, &st) == 0 {
+                let fileType = st.st_mode & S_IFMT
+                if fileType == S_IFDIR {
+                    dirURLs.append(itemURL)
+                } else {
+                    fileAndSymlinkURLs.append(itemURL)
+                }
             }
         }
         
-        let stagingCanonical = stagingDir.resolvingSymlinksInPath().path
-        
-        // Sort directories by path depth (shallow first) to recreate directory tree
+        // Sort directories by path depth (shallow first) to recreate directory tree safely
         dirURLs.sort { $0.path.count < $1.path.count }
         for dirURL in dirURLs {
-            let itemCanonical = dirURL.resolvingSymlinksInPath().path
-            guard itemCanonical.hasPrefix(stagingCanonical) else { continue }
-            var safeRel = String(itemCanonical.dropFirst(stagingCanonical.count))
-            while safeRel.hasPrefix("/") { safeRel.removeFirst() }
-            guard !safeRel.isEmpty else { continue }
+            guard let safeRel = PathSecurity.relativePath(of: dirURL, from: stagingDir), !safeRel.isEmpty else { continue }
             let targetURL = try PathSecurity.resolveSafeDestinationURL(for: safeRel, in: destDir)
-            try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+            if targetURL.standardizedFileURL.path == destDir.standardizedFileURL.path { continue }
+            
+            var isExistingDir: ObjCBool = false
+            var isExistingSymlink: Bool = false
+            if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: &isExistingDir, isSymlink: &isExistingSymlink) {
+                if isExistingSymlink {
+                    let resolvedLink = PathSecurity.canonicalPath(for: targetURL, followSymlinks: true)
+                    let canonicalDest = PathSecurity.canonicalPath(for: destDir, followSymlinks: true)
+                    if !PathSecurity.isCanonicallyContained(path: resolvedLink, within: canonicalDest) {
+                        throw ExtractionError.pathSecurityViolation("Thư mục đích chứa symlink trỏ ra ngoài phạm vi an toàn: \(safeRel)")
+                    }
+                } else if !isExistingDir.boolValue {
+                    throw ExtractionError.writeFailed("Không thể tạo thư mục '\(targetURL.lastPathComponent)' vì đã có một tệp tin trùng tên tại đích.")
+                }
+            } else {
+                try fm.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+            }
         }
         
-        for fileURL in fileURLs {
-            let itemCanonical = fileURL.resolvingSymlinksInPath().path
-            guard itemCanonical.hasPrefix(stagingCanonical) else { continue }
-            var safeRel = String(itemCanonical.dropFirst(stagingCanonical.count))
-            while safeRel.hasPrefix("/") { safeRel.removeFirst() }
-            guard !safeRel.isEmpty else { continue }
+        for itemURL in fileAndSymlinkURLs {
+            guard let safeRel = PathSecurity.relativePath(of: itemURL, from: stagingDir), !safeRel.isEmpty else { continue }
             let targetURL = try PathSecurity.resolveSafeDestinationURL(for: safeRel, in: destDir)
             
             // Check cancellation during move
@@ -306,65 +395,87 @@ public final class SevenZipExtractor: ArchiveExtractorProtocol {
                 extractedBytes: totalBytesExtracted,
                 totalBytes: nil,
                 extractedEntriesCount: extractedCount,
-                totalEntriesCount: fileURLs.count,
+                totalEntriesCount: fileAndSymlinkURLs.count,
                 elapsedTime: Date().timeIntervalSince(startTime)
             )
             if !progress(p) {
                 throw ExtractionError.cancelled
             }
             
+            let parentDir = targetURL.deletingLastPathComponent()
+            if !fm.fileExists(atPath: parentDir.path) {
+                try fm.createDirectory(at: parentDir, withIntermediateDirectories: true, attributes: nil)
+            }
+            
             var finalDestinationURL = targetURL
-            if fm.fileExists(atPath: targetURL.path) {
-                let action: ConflictAction
-                if let active = currentConflictDecision, active.applyToAll {
-                    action = active.action
+            var isTargetDirectory: ObjCBool = false
+            var isTargetSymlink: Bool = false
+            if PathSecurity.itemExistsIncludingSymlink(at: targetURL, isDirectory: &isTargetDirectory, isSymlink: &isTargetSymlink) {
+                if isTargetDirectory.boolValue && !isTargetSymlink {
+                    // Never delete an existing user directory! Auto-rename incoming file
+                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
                 } else {
-                    switch options.conflictStrategy {
-                    case .overwrite:
-                        action = .overwrite
-                    case .skip:
-                        action = .skip
-                    case .rename:
-                        action = .rename
-                    case .ask:
-                        if let resolver = options.conflictResolver {
-                            let decision = resolver(targetURL)
-                            if decision.applyToAll {
-                                currentConflictDecision = decision
-                            }
-                            action = decision.action
-                        } else {
-                            // If conflict cannot be prompted interactively, skip the file safely
+                    let action: ConflictAction
+                    if let active = currentConflictDecision, active.applyToAll {
+                        action = active.action
+                    } else {
+                        switch options.conflictStrategy {
+                        case .overwrite:
+                            action = .overwrite
+                        case .skip:
                             action = .skip
+                        case .rename:
+                            action = .rename
+                        case .ask:
+                            if let resolver = options.conflictResolver {
+                                let decision = resolver(targetURL)
+                                if decision.applyToAll {
+                                    currentConflictDecision = decision
+                                }
+                                action = decision.action
+                            } else {
+                                action = .skip
+                            }
                         }
                     }
-                }
-                
-                switch action {
-                case .cancel:
-                    throw ExtractionError.cancelled
-                case .skip:
-                    skippedCount += 1
-                    continue
-                case .rename:
-                    finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
-                case .overwrite:
-                    try? fm.removeItem(at: targetURL)
-                    finalDestinationURL = targetURL
+                    
+                    switch action {
+                    case .cancel:
+                        throw ExtractionError.cancelled
+                    case .skip:
+                        skippedCount += 1
+                        continue
+                    case .rename:
+                        finalDestinationURL = PathSecurity.generateNonConflictingURL(for: targetURL)
+                    case .overwrite:
+                        finalDestinationURL = targetURL
+                    }
                 }
             }
             
-            try GoogleDriveHelper.safeCommitFile(from: fileURL, to: finalDestinationURL)
-            extractedCount += 1
-            if let size = (try? finalDestinationURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
-                totalBytesExtracted += Int64(size)
+            var st = stat()
+            let isStagedSymlink = (lstat(itemURL.path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK)
+            if isStagedSymlink {
+                if let linkDest = try? fm.destinationOfSymbolicLink(atPath: itemURL.path) {
+                    if PathSecurity.itemExistsIncludingSymlink(at: finalDestinationURL) {
+                        try? fm.removeItem(at: finalDestinationURL)
+                    }
+                    try fm.createSymbolicLink(atPath: finalDestinationURL.path, withDestinationPath: linkDest)
+                    extractedCount += 1
+                }
+            } else {
+                let itemSize = (try? fm.attributesOfItem(atPath: itemURL.path)[.size] as? Int64) ?? 0
+                try GoogleDriveHelper.safeCommitFile(from: itemURL, to: finalDestinationURL)
+                extractedCount += 1
+                totalBytesExtracted += itemSize
             }
         }
         
+        extractionSucceeded = true
         let elapsed = Date().timeIntervalSince(startTime)
         return ExtractionResult(
             archiveURL: archiveURL,
-            destinationURL: destDir,
+            destinationURL: reportedDestination,
             extractedCount: extractedCount,
             skippedCount: skippedCount,
             totalBytes: totalBytesExtracted,

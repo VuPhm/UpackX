@@ -6,7 +6,7 @@ public enum CloudFileStatus {
     case regularLocalFile
 }
 
-/// Helper for Google Drive for Desktop (CloudStorage / FileProvider) integration and file safety
+/// Helper for Google Drive for Desktop (CloudStorage / FileProvider) integration and atomic file commit safety
 public final class GoogleDriveHelper {
     
     /// Detects whether a URL resides inside Google Drive or an Apple CloudStorage provider mount
@@ -38,26 +38,75 @@ public final class GoogleDriveHelper {
         return .localAvailable
     }
     
-    /// Commits a temporary partial file to its final destination safely, handling FileProvider / FUSE non-atomic renames
+    /// Commits a temporary partial file to its final destination safely with atomic replacement and rollback.
+    /// - Never deletes an existing user directory.
+    /// - Safely replaces pre-existing symlinks without writing through them to outside targets.
+    /// - Preserves original file via backup & rollback if move/copy fails on cloud/virtual mounts.
     public static func safeCommitFile(from tempURL: URL, to finalDestinationURL: URL) throws {
         let fm = FileManager.default
         
-        // Remove existing destination file if overwriting
-        if fm.fileExists(atPath: finalDestinationURL.path) {
-            try? fm.removeItem(at: finalDestinationURL)
+        var isExistingDir: ObjCBool = false
+        var isExistingSymlink: Bool = false
+        let exists = PathSecurity.itemExistsIncludingSymlink(
+            at: finalDestinationURL,
+            isDirectory: &isExistingDir,
+            isSymlink: &isExistingSymlink
+        )
+        
+        if exists && isExistingDir.boolValue && !isExistingSymlink {
+            throw ExtractionError.writeFailed("Không thể ghi đè thư mục hiện có bằng tệp tin: \(finalDestinationURL.path)")
         }
         
-        do {
-            // Primary attempt: atomic rename / move
-            try fm.moveItem(at: tempURL, to: finalDestinationURL)
-        } catch {
-            // Fallback for cloud storage cross-device or virtual mount rename restrictions
+        if !exists {
             do {
+                try fm.moveItem(at: tempURL, to: finalDestinationURL)
+                return
+            } catch {
+                do {
+                    try fm.copyItem(at: tempURL, to: finalDestinationURL)
+                    try? fm.removeItem(at: tempURL)
+                    return
+                } catch let fallbackError {
+                    throw ExtractionError.writeFailed("Không thể hoàn tất tệp tin (\(fallbackError.localizedDescription))")
+                }
+            }
+        }
+        
+        // Destination file or symlink already exists:
+        // If it is NOT a symlink, try native atomic replaceItem first
+        if !isExistingSymlink {
+            do {
+                var resultingURL: NSURL? = nil
+                try fm.replaceItem(
+                    at: finalDestinationURL,
+                    withItemAt: tempURL,
+                    backupItemName: nil,
+                    options: [.withoutDeletingBackupItem],
+                    resultingItemURL: &resultingURL
+                )
+                return
+            } catch {
+                // Fallback to staged backup and rollback below
+            }
+        }
+        
+        // Staged Backup & Rollback (also handles pre-existing symlinks safely by moving the symlink itself)
+        let parentDir = finalDestinationURL.deletingLastPathComponent()
+        let backupURL = parentDir.appendingPathComponent(".upackx_extract_backup_\(UUID().uuidString)")
+        
+        try fm.moveItem(at: finalDestinationURL, to: backupURL)
+        do {
+            do {
+                try fm.moveItem(at: tempURL, to: finalDestinationURL)
+            } catch {
                 try fm.copyItem(at: tempURL, to: finalDestinationURL)
                 try? fm.removeItem(at: tempURL)
-            } catch let fallbackError {
-                throw ExtractionError.writeFailed("Không thể hoàn tất file trên Google Drive (\(fallbackError.localizedDescription))")
             }
+            try? fm.removeItem(at: backupURL)
+        } catch let commitError {
+            // Rollback original file/symlink
+            try? fm.moveItem(at: backupURL, to: finalDestinationURL)
+            throw ExtractionError.writeFailed("Không thể hoàn tất tệp tin (\(commitError.localizedDescription))")
         }
     }
     
